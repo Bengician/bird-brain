@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Birding Scorer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .animate-fadeIn {
+            animation: fadeIn 0.5s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+
+    <script>
+        // Simple state management
+        let state = {
+            checklists: [],
+            userHistory: [],
+            frequencyData: {},
+            regions: [],
+            selectedRegion: null,
+            currentResult: null,
+            view: 'home',
+            showRegionPrompt: false,
+            expandedChecklistId: null,
+            isScoring: false,
+            scoringProgress: [],
+            scoringTotal: 0
+        };
+
+        // Load data from localStorage
+        function loadData() {
+            try {
+                const history = localStorage.getItem('user_history');
+                const freq = localStorage.getItem('frequency_data');
+                const regions = localStorage.getItem('regions');
+                const checks = localStorage.getItem('checklists');
+                
+                if (history) state.userHistory = JSON.parse(history);
+                if (freq) state.frequencyData = JSON.parse(freq);
+                if (regions) state.regions = JSON.parse(regions);
+                if (checks) state.checklists = JSON.parse(checks);
+            } catch (error) {
+                console.log('No existing data');
+            }
+            render();
+        }
+
+        // Save data to localStorage
+        function saveData() {
+            localStorage.setItem('user_history', JSON.stringify(state.userHistory));
+            localStorage.setItem('frequency_data', JSON.stringify(state.frequencyData));
+            localStorage.setItem('regions', JSON.stringify(state.regions));
+            localStorage.setItem('checklists', JSON.stringify(state.checklists));
+        }
+
+        // Scoring functions
+        function weekOfYear(dateStr) {
+            const date = new Date(dateStr);
+            const startOfYear = new Date(date.getFullYear(), 0, 1);
+            const days = Math.floor((date - startOfYear) / (24 * 60 * 60 * 1000));
+            return Math.ceil((days + startOfYear.getDay() + 1) / 7);
+        }
+
+        function baseScore(frequency, floor = 0.001) {
+            const f = Math.max(frequency, floor);
+            return 10 * Math.log10(1 / f);
+        }
+
+        function seasonalBonus(frequency, peak, threshold = 0.25) {
+            return frequency < threshold * peak ? 1.5 : 1.0;
+        }
+
+        function noveltyMultiplier(speciesCode, history) {
+            const count = history.filter(h => h.species_code === speciesCode).length;
+            if (count === 0) return 1.0;
+            if (count === 1) return 0.5;
+            return 0.25;
+        }
+
+        function scoreObservation(species, date, count, history, freqData, region) {
+            const week = weekOfYear(date);
+            const key = `${species}_${week}_${region}`;
+            const freqInfo = freqData[key];
+
+            if (!freqInfo) {
+                return {
+                    species_code: species,
+                    score: 0,
+                    error: `No data for ${species} week ${week} in ${region}`
+                };
+            }
+
+            const base = baseScore(freqInfo.frequency);
+            const season = seasonalBonus(freqInfo.frequency, freqInfo.peak_frequency);
+            const novelty = noveltyMultiplier(species, history);
+            const finalScore = base * season * novelty * count;
+
+            // Determine rarity tier
+            let rarity = 'Common';
+            let rarityColor = 'gray';
+            
+            if (freqInfo.frequency < 0.02) {
+                rarity = 'Mega Rare';
+                rarityColor = 'purple';
+            } else if (freqInfo.frequency < 0.1) {
+                rarity = 'Rare';
+                rarityColor = 'red';
+            } else if (freqInfo.frequency < 0.2) {
+                rarity = 'Scarce';
+                rarityColor = 'orange';
+            } else if (freqInfo.frequency < 0.3) {
+                rarity = 'Uncommon';
+                rarityColor = 'yellow';
+            }
+
+            return {
+                species_code: species,
+                score: Math.round(finalScore * 100) / 100,
+                is_first_sighting: novelty === 1.0,
+                count: count,
+                rarity: rarity,
+                rarity_color: rarityColor,
+                frequency: freqInfo.frequency
+            };
+        }
+
+        // File upload handlers
+        let pendingChecklistFile = null;
+
+        async function handleChecklistUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Store the file and show region prompt
+            pendingChecklistFile = file;
+            state.showRegionPrompt = true;
+            render();
+            event.target.value = '';
+        }
+
+        async function processChecklist(region) {
+            if (!pendingChecklistFile) return;
+
+            const text = await pendingChecklistFile.text();
+            const lines = text.split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            const speciesIdx = headers.indexOf('Species');
+            const dateIdx = headers.indexOf('Observation Date');
+            const countIdx = headers.indexOf('Count');
+
+            if (speciesIdx === -1 || dateIdx === -1 || countIdx === -1) {
+                alert('CSV must have Species, Observation Date, and Count columns');
+                state.showRegionPrompt = false;
+                pendingChecklistFile = null;
+                render();
+                return;
+            }
+
+            const observations = [];
+            let obsDate = null;
+
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                
+                const cols = lines[i].split(',').map(c => c.trim());
+                const species = cols[speciesIdx];
+                const date = cols[dateIdx];
+                const countStr = cols[countIdx];
+                const count = countStr === 'X' || !countStr ? 1 : parseInt(countStr);
+
+                if (!obsDate) obsDate = date;
+                observations.push({ species, date, count });
+            }
+
+            // Score all observations first
+            const results = [];
+            const newHistory = [...state.userHistory];
+
+            for (const obs of observations) {
+                const result = scoreObservation(
+                    obs.species,
+                    obs.date,
+                    obs.count,
+                    newHistory,
+                    state.frequencyData,
+                    region
+                );
+                
+                results.push(result);
+
+                if (!result.error) {
+                    for (let i = 0; i < obs.count; i++) {
+                        newHistory.push({
+                            date: obs.date,
+                            species_code: obs.species
+                        });
+                    }
+                }
+            }
+
+            // Sort by frequency (highest to lowest = common to rare)
+            results.sort((a, b) => {
+                if (a.error) return 1;
+                if (b.error) return -1;
+                return (b.frequency || 0) - (a.frequency || 0);
+            });
+
+            // Start animated scoring
+            state.showRegionPrompt = false;
+            state.isScoring = true;
+            state.scoringProgress = [];
+            state.scoringTotal = 0;
+            render();
+
+            // Animate through each bird
+            for (let i = 0; i < results.length; i++) {
+                await new Promise(resolve => setTimeout(resolve, 800)); // Delay between birds
+                
+                state.scoringProgress.push(results[i]);
+                state.scoringTotal += results[i].score || 0;
+                render();
+            }
+
+            // Wait a moment, then show final result
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const checklistResult = {
+                id: Date.now(),
+                date: obsDate,
+                region: region,
+                total_score: Math.round(state.scoringTotal * 100) / 100,
+                species_count: observations.length,
+                observations: results
+            };
+
+            state.checklists = [checklistResult, ...state.checklists];
+            state.userHistory = newHistory;
+            state.currentResult = checklistResult;
+            state.isScoring = false;
+            state.scoringProgress = [];
+            state.scoringTotal = 0;
+            pendingChecklistFile = null;
+            
+            saveData();
+            render();
+        }
+
+        async function handleFrequencyUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const text = await file.text();
+            const lines = text.split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            const speciesIdx = headers.findIndex(h => h.toLowerCase() === 'species');
+            const weekIdx = headers.findIndex(h => h.toLowerCase() === 'week');
+            const freqIdx = headers.findIndex(h => h.toLowerCase() === 'frequency');
+            const peakIdx = headers.findIndex(h => h.toLowerCase().includes('peak'));
+            const regionIdx = headers.findIndex(h => h.toLowerCase() === 'region');
+
+            if (regionIdx === -1) {
+                alert('CSV must have a Region column');
+                return;
+            }
+
+            const freqData = {};
+            const regionsSet = new Set();
+
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                
+                const cols = lines[i].split(',').map(c => c.trim());
+                const species = cols[speciesIdx];
+                const week = cols[weekIdx];
+                const frequency = parseFloat(cols[freqIdx]);
+                const peak = parseFloat(cols[peakIdx]);
+                const region = cols[regionIdx];
+
+                regionsSet.add(region);
+                freqData[`${species}_${week}_${region}`] = { frequency, peak_frequency: peak };
+            }
+
+            state.frequencyData = freqData;
+            state.regions = Array.from(regionsSet).sort();
+            saveData();
+            alert('Frequency data loaded!');
+            render();
+            event.target.value = '';
+        }
+
+        function resetData() {
+            if (confirm('Reset all data? This cannot be undone.')) {
+                state = {
+                    checklists: [],
+                    userHistory: [],
+                    frequencyData: {},
+                    currentResult: null,
+                    view: 'home'
+                };
+                localStorage.clear();
+                render();
+            }
+        }
+
+        // Calculate stats
+        function getStats() {
+            const uniqueSpecies = new Set(state.userHistory.map(h => h.species_code)).size;
+            const totalScore = state.checklists.reduce((sum, c) => sum + c.total_score, 0);
+            
+            return {
+                totalObservations: state.userHistory.length,
+                uniqueSpecies: uniqueSpecies,
+                totalScore: Math.round(totalScore)
+            };
+        }
+
+        // Render the app
+        function render() {
+            const stats = getStats();
+            const hasFreqData = Object.keys(state.frequencyData).length > 0;
+
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="min-h-screen bg-gradient-to-br from-blue-50 to-green-50 pb-20">
+                    <!-- Header -->
+                    <div class="bg-white shadow-sm border-b border-gray-200">
+                        <div class="max-w-2xl mx-auto px-4 py-4">
+                            <h1 class="text-2xl font-bold text-gray-900">🐦 Birding Scorer</h1>
+                        </div>
+                    </div>
+
+                    <!-- Region Selection Modal -->
+                    ${state.showRegionPrompt ? `
+                        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                            <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+                                <h2 class="text-xl font-bold text-gray-900 mb-4">Select Region</h2>
+                                <p class="text-sm text-gray-600 mb-4">
+                                    Which eBird region was this checklist recorded in?
+                                </p>
+                                <div class="space-y-2 mb-4 max-h-96 overflow-y-auto">
+                                    ${state.regions.map(region => `
+                                        <button
+                                            onclick="processChecklist('${region}')"
+                                            class="w-full text-left px-4 py-3 bg-gray-50 hover:bg-blue-50 rounded-lg border border-gray-200 hover:border-blue-300 transition-colors"
+                                        >
+                                            <span class="font-medium text-gray-900">${region}</span>
+                                        </button>
+                                    `).join('')}
+                                </div>
+                                <button
+                                    onclick="state.showRegionPrompt = false; pendingChecklistFile = null; render();"
+                                    class="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 font-medium"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    <!-- Main Content -->
+                    <div class="max-w-2xl mx-auto px-4 py-6">
+                        ${state.isScoring ? `
+                            <!-- Scoring Animation -->
+                            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                                <h2 class="text-2xl font-bold text-center text-gray-900 mb-6">
+                                    Scoring Your Checklist...
+                                </h2>
+                                
+                                <!-- Score Meter -->
+                                <div class="mb-6">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <span class="text-sm font-medium text-gray-600">Total Score</span>
+                                        <span class="text-4xl font-bold text-blue-600 animate-pulse">
+                                            ${Math.round(state.scoringTotal * 100) / 100}
+                                        </span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+                                        <div class="bg-gradient-to-r from-blue-500 to-green-500 h-4 rounded-full transition-all duration-500"
+                                             style="width: ${Math.min(100, (state.scoringTotal / 100) * 100)}%">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Birds Being Scored -->
+                                <div class="space-y-3 max-h-96 overflow-y-auto">
+                                    ${state.scoringProgress.slice().reverse().map((obs, idx) => `
+                                        <div class="flex items-center justify-between py-3 px-4 rounded-lg border-2 animate-fadeIn
+                                            ${!obs.error && obs.rarity_color === 'purple' ? 'border-purple-400 bg-purple-50' : ''}
+                                            ${!obs.error && obs.rarity_color === 'red' ? 'border-red-400 bg-red-50' : ''}
+                                            ${!obs.error && obs.rarity_color === 'orange' ? 'border-orange-400 bg-orange-50' : ''}
+                                            ${!obs.error && obs.rarity_color === 'yellow' ? 'border-yellow-400 bg-yellow-50' : ''}
+                                            ${!obs.error && obs.rarity_color === 'gray' ? 'border-gray-300 bg-gray-50' : ''}
+                                            ${obs.error ? 'border-gray-200 bg-white' : ''}
+                                            ${idx === state.scoringProgress.length - 1 ? 'ring-4 ring-blue-300' : ''}
+                                        ">
+                                            <div class="flex-1">
+                                                <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
+                                                    <span class="text-lg">${obs.species_code}</span>
+                                                    ${!obs.error ? `
+                                                        <span class="text-xs px-2.5 py-1 rounded-full font-bold shadow-sm
+                                                            ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
+                                                            ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
+                                                            ${obs.rarity_color === 'orange' ? 'bg-orange-600 text-white' : ''}
+                                                            ${obs.rarity_color === 'yellow' ? 'bg-yellow-600 text-white' : ''}
+                                                            ${obs.rarity_color === 'gray' ? 'bg-gray-600 text-white' : ''}
+                                                        ">
+                                                            ${obs.rarity.toUpperCase()}
+                                                        </span>
+                                                    ` : ''}
+                                                    ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2.5 py-1 rounded-full font-bold shadow-sm animate-bounce">LIFE BIRD!</span>' : ''}
+                                                </div>
+                                            </div>
+                                            <div class="text-right ml-3">
+                                                ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-2xl font-bold text-blue-600">+${obs.score}</div>`}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : state.view === 'home' ? `
+                            <!-- Stats Cards -->
+                            <div class="grid grid-cols-3 gap-3 mb-6">
+                                <div class="bg-white rounded-lg shadow p-4 text-center">
+                                    <div class="text-2xl font-bold text-blue-600">${stats.totalObservations}</div>
+                                    <div class="text-xs text-gray-600">Observations</div>
+                                </div>
+                                <div class="bg-white rounded-lg shadow p-4 text-center">
+                                    <div class="text-2xl font-bold text-green-600">${stats.uniqueSpecies}</div>
+                                    <div class="text-xs text-gray-600">Species</div>
+                                </div>
+                                <div class="bg-white rounded-lg shadow p-4 text-center">
+                                    <div class="text-2xl font-bold text-yellow-600">${stats.totalScore}</div>
+                                    <div class="text-xs text-gray-600">Total Score</div>
+                                </div>
+                            </div>
+
+                            ${!hasFreqData ? `
+                                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                                    <h3 class="font-semibold text-yellow-900 mb-2">Setup Required</h3>
+                                    <p class="text-sm text-yellow-800 mb-3">
+                                        Upload your frequency data CSV first.
+                                    </p>
+                                    <input
+                                        id="frequencyInput"
+                                        type="file"
+                                        accept=".csv,text/csv,text/comma-separated-values,application/csv"
+                                        onchange="handleFrequencyUpload(event)"
+                                        class="block w-full text-sm text-gray-500
+                                            file:mr-4 file:py-2 file:px-4
+                                            file:rounded-full file:border-0
+                                            file:text-sm file:font-semibold
+                                            file:bg-yellow-500 file:text-white
+                                            hover:file:bg-yellow-600 cursor-pointer"
+                                    />
+                                </div>
+                            ` : ''}
+
+                            <!-- Score Checklist Button -->
+                            <label class="block mb-6 ${!hasFreqData ? 'opacity-50 pointer-events-none' : ''}">
+                                <div class="bg-gradient-to-r from-blue-500 to-green-500 text-white rounded-xl shadow-lg p-6 text-center cursor-pointer hover:shadow-xl transition-shadow active:scale-95 transition-transform">
+                                    <div class="text-4xl mb-3">📤</div>
+                                    <div class="text-xl font-bold mb-1">Score Checklist</div>
+                                    <div class="text-sm opacity-90">Upload eBird CSV</div>
+                                </div>
+                                <input
+                                    id="checklistInput"
+                                    type="file"
+                                    accept=".csv,text/csv,text/comma-separated-values,application/csv"
+                                    onchange="handleChecklistUpload(event)"
+                                    class="hidden"
+                                    ${!hasFreqData ? 'disabled' : ''}
+                                />
+                            </label>
+                            
+                            <!-- Alternative: Manual file selector for mobile -->
+                            <button
+                                onclick="document.getElementById('checklistInput').click()"
+                                class="w-full py-3 px-4 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg font-medium mb-6 ${!hasFreqData ? 'hidden' : ''}"
+                            >
+                                Or tap here to select CSV file
+                            </button>
+
+                            ${state.currentResult ? `
+                                <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                                    <div class="flex items-center justify-between mb-4">
+                                        <h2 class="text-xl font-bold text-gray-900">Latest Score</h2>
+                                        <div class="text-3xl font-bold text-blue-600">
+                                            ${state.currentResult.total_score}
+                                        </div>
+                                    </div>
+                                    <div class="text-sm text-gray-600 mb-4">
+                                        📅 ${state.currentResult.date} • 📍 ${state.currentResult.region} • ${state.currentResult.species_count} species
+                                    </div>
+                                    <div class="space-y-3">
+                                        ${state.currentResult.observations.map(obs => `
+                                            <div class="flex items-center justify-between py-3 px-4 rounded-lg border-2 
+                                                ${!obs.error && obs.rarity_color === 'purple' ? 'border-purple-400 bg-purple-50' : ''}
+                                                ${!obs.error && obs.rarity_color === 'red' ? 'border-red-400 bg-red-50' : ''}
+                                                ${!obs.error && obs.rarity_color === 'orange' ? 'border-orange-400 bg-orange-50' : ''}
+                                                ${!obs.error && obs.rarity_color === 'yellow' ? 'border-yellow-400 bg-yellow-50' : ''}
+                                                ${!obs.error && obs.rarity_color === 'gray' ? 'border-gray-300 bg-gray-50' : ''}
+                                                ${obs.error ? 'border-gray-200 bg-white' : ''}
+                                            ">
+                                                <div class="flex-1">
+                                                    <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
+                                                        <span class="text-lg">${obs.species_code}</span>
+                                                        ${!obs.error ? `
+                                                            <span class="text-xs px-2.5 py-1 rounded-full font-bold shadow-sm
+                                                                ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
+                                                                ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
+                                                                ${obs.rarity_color === 'orange' ? 'bg-orange-600 text-white' : ''}
+                                                                ${obs.rarity_color === 'yellow' ? 'bg-yellow-600 text-white' : ''}
+                                                                ${obs.rarity_color === 'gray' ? 'bg-gray-600 text-white' : ''}
+                                                            ">
+                                                                ${obs.rarity.toUpperCase()}
+                                                            </span>
+                                                        ` : ''}
+                                                        ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2.5 py-1 rounded-full font-bold shadow-sm">LIFE BIRD!</span>' : ''}
+                                                    </div>
+                                                    ${obs.count > 1 ? `<div class="text-sm text-gray-600 font-medium">×${obs.count} individuals</div>` : ''}
+                                                </div>
+                                                <div class="text-right ml-3">
+                                                    ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-2xl font-bold text-blue-600">${obs.score}</div>`}
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+
+                            <button
+                                onclick="resetData()"
+                                class="w-full py-2 text-sm text-red-600 hover:text-red-700"
+                            >
+                                Reset All Data
+                            </button>
+                        ` : `
+                            <!-- History View -->
+                            <div class="space-y-4">
+                                <h2 class="text-xl font-bold text-gray-900 mb-4">Checklist History</h2>
+                                ${state.checklists.map(checklist => `
+                                    <div class="bg-white rounded-lg shadow overflow-hidden">
+                                        <button
+                                            onclick="state.expandedChecklistId = state.expandedChecklistId === ${checklist.id} ? null : ${checklist.id}; render();"
+                                            class="w-full p-4 text-left hover:bg-gray-50 transition-colors"
+                                        >
+                                            <div class="flex items-center justify-between mb-2">
+                                                <div class="text-sm text-gray-600">📅 ${checklist.date}</div>
+                                                <div class="text-xl font-bold text-blue-600">${checklist.total_score}</div>
+                                            </div>
+                                            <div class="text-sm text-gray-600 flex items-center justify-between">
+                                                <span>📍 ${checklist.region} • ${checklist.species_count} species</span>
+                                                <span class="text-gray-400">${state.expandedChecklistId === checklist.id ? '▼' : '▶'}</span>
+                                            </div>
+                                        </button>
+                                        
+                                        ${state.expandedChecklistId === checklist.id ? `
+                                            <div class="border-t border-gray-200 p-4 bg-gray-50">
+                                                <div class="space-y-3">
+                                                    ${checklist.observations.map(obs => `
+                                                        <div class="flex items-center justify-between py-3 px-4 rounded-lg border-2 bg-white
+                                                            ${!obs.error && obs.rarity_color === 'purple' ? 'border-purple-400 bg-purple-50' : ''}
+                                                            ${!obs.error && obs.rarity_color === 'red' ? 'border-red-400 bg-red-50' : ''}
+                                                            ${!obs.error && obs.rarity_color === 'orange' ? 'border-orange-400 bg-orange-50' : ''}
+                                                            ${!obs.error && obs.rarity_color === 'yellow' ? 'border-yellow-400 bg-yellow-50' : ''}
+                                                            ${!obs.error && obs.rarity_color === 'gray' ? 'border-gray-300 bg-gray-50' : ''}
+                                                            ${obs.error ? 'border-gray-200' : ''}
+                                                        ">
+                                                            <div class="flex-1">
+                                                                <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
+                                                                    <span class="text-base">${obs.species_code}</span>
+                                                                    ${!obs.error ? `
+                                                                        <span class="text-xs px-2 py-0.5 rounded-full font-bold
+                                                                            ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
+                                                                            ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
+                                                                            ${obs.rarity_color === 'orange' ? 'bg-orange-600 text-white' : ''}
+                                                                            ${obs.rarity_color === 'yellow' ? 'bg-yellow-600 text-white' : ''}
+                                                                            ${obs.rarity_color === 'gray' ? 'bg-gray-600 text-white' : ''}
+                                                                        ">
+                                                                            ${obs.rarity.toUpperCase()}
+                                                                        </span>
+                                                                    ` : ''}
+                                                                    ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full font-bold">LIFE!</span>' : ''}
+                                                                </div>
+                                                                ${obs.count > 1 ? `<div class="text-xs text-gray-600">×${obs.count}</div>` : ''}
+                                                            </div>
+                                                            <div class="text-right ml-3">
+                                                                ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-lg font-bold text-blue-600">${obs.score}</div>`}
+                                                            </div>
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                                ${state.checklists.length === 0 ? '<div class="text-center text-gray-500 py-12">No checklists yet</div>' : ''}
+                            </div>
+                        `}
+                    </div>
+
+                    <!-- Bottom Navigation -->
+                    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg">
+                        <div class="max-w-2xl mx-auto px-4 py-2 flex justify-around">
+                            <button
+                                onclick="state.view = 'home'; render();"
+                                class="flex flex-col items-center py-2 px-4 ${state.view === 'home' ? 'text-blue-600' : 'text-gray-600'}"
+                            >
+                                <span class="text-2xl">🏆</span>
+                                <span class="text-xs mt-1">Score</span>
+                            </button>
+                            <button
+                                onclick="state.view = 'history'; render();"
+                                class="flex flex-col items-center py-2 px-4 ${state.view === 'history' ? 'text-blue-600' : 'text-gray-600'}"
+                            >
+                                <span class="text-2xl">📋</span>
+                                <span class="text-xs mt-1">History</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initialize app
+        loadData();
+    </script>
+</body>
+</html>
