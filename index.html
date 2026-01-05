@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Birding Scorer</title>
+    <title>Bird Brain</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
@@ -41,25 +41,76 @@
             expandedChecklistId: null,
             isScoring: false,
             scoringProgress: [],
-            scoringTotal: 0
+            scoringTotal: 0,
+            currentBirdScore: 0,
+            currentBirdMultipliers: [],
+            showHowItWorks: false,
+            expandedSpeciesId: null
         };
 
         // Load data from localStorage
-        function loadData() {
+        async function loadData() {
             try {
                 const history = localStorage.getItem('user_history');
-                const freq = localStorage.getItem('frequency_data');
                 const regions = localStorage.getItem('regions');
                 const checks = localStorage.getItem('checklists');
                 
                 if (history) state.userHistory = JSON.parse(history);
-                if (freq) state.frequencyData = JSON.parse(freq);
                 if (regions) state.regions = JSON.parse(regions);
                 if (checks) state.checklists = JSON.parse(checks);
+                
+                // Try to load frequency data from localStorage first
+                const cachedFreq = localStorage.getItem('frequency_data');
+                if (cachedFreq) {
+                    state.frequencyData = JSON.parse(cachedFreq);
+                    render();
+                } else {
+                    // If not cached, fetch from GitHub
+                    await fetchFrequencyData();
+                }
             } catch (error) {
-                console.log('No existing data');
+                console.log('Error loading data:', error);
+                render();
             }
-            render();
+        }
+
+        // Fetch frequency data from GitHub
+        async function fetchFrequencyData() {
+            try {
+                // Replace with your actual GitHub repository URL
+                const url = 'https://raw.githubusercontent.com/Bengician/bird-brain/main/frequency_data.json';
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch frequency data');
+                }
+                
+                const data = await response.json();
+                
+                // Extract unique regions from the keys
+                const regionsSet = new Set();
+                Object.keys(data).forEach(key => {
+                    const parts = key.split('_');
+                    if (parts.length >= 3) {
+                        const region = parts.slice(2).join('_');
+                        regionsSet.add(region);
+                    }
+                });
+                
+                state.frequencyData = data;
+                state.regions = Array.from(regionsSet).sort();
+                
+                // Cache it
+                localStorage.setItem('frequency_data', JSON.stringify(data));
+                localStorage.setItem('regions', JSON.stringify(state.regions));
+                
+                render();
+            } catch (error) {
+                console.error('Error loading frequency data:', error);
+                state.frequencyData = {};
+                state.regions = [];
+                render();
+            }
         }
 
         // Save data to localStorage
@@ -110,7 +161,7 @@
             const base = baseScore(freqInfo.frequency);
             const season = seasonalBonus(freqInfo.frequency, freqInfo.peak_frequency);
             const novelty = noveltyMultiplier(species, history);
-            const finalScore = base * season * novelty * count;
+            const finalScore = base * season * novelty * count * 10; // 10x multiplier
 
             // Determine rarity tier
             let rarity = 'Common';
@@ -132,7 +183,11 @@
 
             return {
                 species_code: species,
-                score: Math.round(finalScore * 100) / 100,
+                score: Math.round(finalScore), // No decimals
+                base_score: Math.round(base * 10),
+                seasonal_bonus: season,
+                novelty_multiplier: novelty,
+                count_multiplier: count,
                 is_first_sighting: novelty === 1.0,
                 count: count,
                 rarity: rarity,
@@ -228,25 +283,77 @@
             state.isScoring = true;
             state.scoringProgress = [];
             state.scoringTotal = 0;
+            state.currentBirdScore = 0;
+            state.currentBirdMultipliers = [];
             render();
 
-            // Animate through each bird
+            // Animate through each bird with multiplier breakdown
             for (let i = 0; i < results.length; i++) {
-                await new Promise(resolve => setTimeout(resolve, 800)); // Delay between birds
+                const obs = results[i];
                 
-                state.scoringProgress.push(results[i]);
-                state.scoringTotal += results[i].score || 0;
+                if (obs.error) {
+                    state.scoringProgress.push(obs);
+                    render();
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    continue;
+                }
+
+                // Step 1: Show the bird with base score
+                state.currentBirdScore = obs.base_score;
+                state.currentBirdMultipliers = ['Base Score'];
+                const currentObs = { ...obs, score: obs.base_score };
+                state.scoringProgress.push(currentObs);
                 render();
+                await new Promise(resolve => setTimeout(resolve, 1200));
+
+                // Step 2: Apply seasonal bonus
+                if (obs.seasonal_bonus > 1.0) {
+                    state.currentBirdScore = Math.round(obs.base_score * obs.seasonal_bonus);
+                    state.currentBirdMultipliers.push('Seasonal Bonus (Ã—1.5)');
+                    currentObs.score = state.currentBirdScore;
+                    state.scoringProgress[state.scoringProgress.length - 1] = currentObs;
+                    render();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                // Step 3: Apply novelty multiplier
+                if (obs.novelty_multiplier !== 1.0) {
+                    state.currentBirdScore = Math.round(obs.base_score * obs.seasonal_bonus * obs.novelty_multiplier);
+                    const multiplierText = obs.novelty_multiplier === 0.5 ? '2nd Sighting (Ã—0.5)' : 'Repeat (Ã—0.25)';
+                    state.currentBirdMultipliers.push(multiplierText);
+                    currentObs.score = state.currentBirdScore;
+                    state.scoringProgress[state.scoringProgress.length - 1] = currentObs;
+                    render();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                // Step 4: Apply count multiplier
+                if (obs.count_multiplier > 1) {
+                    state.currentBirdScore = obs.score;
+                    state.currentBirdMultipliers.push(`Count (Ã—${obs.count_multiplier})`);
+                    currentObs.score = state.currentBirdScore;
+                    state.scoringProgress[state.scoringProgress.length - 1] = currentObs;
+                    render();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                // Final: Add to total and pause
+                state.scoringTotal += obs.score;
+                state.currentBirdMultipliers = [];
+                currentObs.score = obs.score;
+                state.scoringProgress[state.scoringProgress.length - 1] = currentObs;
+                render();
+                await new Promise(resolve => setTimeout(resolve, 1500)); // Longer pause between birds
             }
 
             // Wait a moment, then show final result
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
             const checklistResult = {
                 id: Date.now(),
                 date: obsDate,
                 region: region,
-                total_score: Math.round(state.scoringTotal * 100) / 100,
+                total_score: Math.round(state.scoringTotal),
                 species_count: observations.length,
                 observations: results
             };
@@ -257,6 +364,8 @@
             state.isScoring = false;
             state.scoringProgress = [];
             state.scoringTotal = 0;
+            state.currentBirdScore = 0;
+            state.currentBirdMultipliers = [];
             pendingChecklistFile = null;
             
             saveData();
@@ -344,7 +453,7 @@
                     <!-- Header -->
                     <div class="bg-white shadow-sm border-b border-gray-200">
                         <div class="max-w-2xl mx-auto px-4 py-4">
-                            <h1 class="text-2xl font-bold text-gray-900">🐦 Birding Scorer</h1>
+                            <h1 class="text-2xl font-bold text-gray-900">ðŸ¦ Bird Brain</h1>
                         </div>
                     </div>
 
@@ -376,6 +485,96 @@
                         </div>
                     ` : ''}
 
+                    <!-- How It Works Modal -->
+                    ${state.showHowItWorks ? `
+                        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+                            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 my-8">
+                                <h2 class="text-2xl font-bold text-gray-900 mb-4">How Is Score Calculated?</h2>
+                                
+                                <div class="space-y-4 text-sm">
+                                    <div>
+                                        <h3 class="font-bold text-lg text-blue-600 mb-2">Base Score (Rarity)</h3>
+                                        <p class="text-gray-700 mb-2">Calculated using a logarithmic scale based on how rare the bird is:</p>
+                                        <div class="bg-gray-50 p-3 rounded font-mono text-xs">
+                                            Base Score = 100 Ã— logâ‚â‚€(1 / frequency)
+                                        </div>
+                                        <p class="text-gray-600 mt-2">
+                                            Examples: A 1% bird scores ~200 points, a 10% bird scores ~100 points, a 50% bird scores ~30 points
+                                        </p>
+                                    </div>
+
+                                    <div>
+                                        <h3 class="font-bold text-lg text-orange-600 mb-2">Seasonal Bonus</h3>
+                                        <p class="text-gray-700 mb-2">Out-of-season sightings get a 1.5Ã— multiplier:</p>
+                                        <div class="bg-gray-50 p-3 rounded">
+                                            <p>âœ“ Applied when frequency &lt; 25% of annual peak</p>
+                                            <p class="text-gray-600 text-xs mt-1">Example: Seeing a warbler in winter</p>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h3 class="font-bold text-lg text-green-600 mb-2">Novelty Multiplier</h3>
+                                        <p class="text-gray-700 mb-2">Rewards diminish with repeated sightings:</p>
+                                        <div class="bg-gray-50 p-3 rounded space-y-1">
+                                            <p>ðŸŒŸ <strong>First sighting:</strong> 1.0Ã— (full points - LIFE BIRD!)</p>
+                                            <p>ðŸ“ <strong>Second sighting:</strong> 0.5Ã— (half points)</p>
+                                            <p>ðŸ” <strong>Third+ sighting:</strong> 0.25Ã— (quarter points)</p>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h3 class="font-bold text-lg text-purple-600 mb-2">Count Multiplier</h3>
+                                        <p class="text-gray-700 mb-2">Score multiplied by number of individuals seen:</p>
+                                        <div class="bg-gray-50 p-3 rounded">
+                                            <p>Saw 5 birds? Score Ã— 5</p>
+                                            <p class="text-gray-600 text-xs mt-1">Rewards finding large groups</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="bg-blue-50 border-2 border-blue-300 rounded-lg p-4">
+                                        <h3 class="font-bold text-blue-900 mb-2">Final Calculation</h3>
+                                        <div class="font-mono text-xs bg-white p-2 rounded">
+                                            Score = Base Ã— Seasonal Ã— Novelty Ã— Count
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h3 class="font-bold text-lg text-gray-900 mb-2">Rarity Tiers</h3>
+                                        <div class="space-y-2">
+                                            <div class="flex items-center gap-2">
+                                                <span class="px-3 py-1 bg-purple-600 text-white text-xs font-bold rounded-full">MEGA RARE</span>
+                                                <span class="text-gray-700">&lt; 2% frequency</span>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-full">RARE</span>
+                                                <span class="text-gray-700">&lt; 10% frequency</span>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="px-3 py-1 bg-orange-600 text-white text-xs font-bold rounded-full">SCARCE</span>
+                                                <span class="text-gray-700">&lt; 20% frequency</span>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="px-3 py-1 bg-yellow-600 text-white text-xs font-bold rounded-full">UNCOMMON</span>
+                                                <span class="text-gray-700">&lt; 30% frequency</span>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="px-3 py-1 bg-gray-600 text-white text-xs font-bold rounded-full">COMMON</span>
+                                                <span class="text-gray-700">â‰¥ 30% frequency</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button
+                                    onclick="state.showHowItWorks = false; render();"
+                                    class="w-full mt-6 py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold"
+                                >
+                                    Got It!
+                                </button>
+                            </div>
+                        </div>
+                    ` : ''}
+
                     <!-- Main Content -->
                     <div class="max-w-2xl mx-auto px-4 py-6">
                         ${state.isScoring ? `
@@ -390,15 +589,28 @@
                                     <div class="flex items-center justify-between mb-2">
                                         <span class="text-sm font-medium text-gray-600">Total Score</span>
                                         <span class="text-4xl font-bold text-blue-600 animate-pulse">
-                                            ${Math.round(state.scoringTotal * 100) / 100}
+                                            ${Math.round(state.scoringTotal)}
                                         </span>
                                     </div>
                                     <div class="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
                                         <div class="bg-gradient-to-r from-blue-500 to-green-500 h-4 rounded-full transition-all duration-500"
-                                             style="width: ${Math.min(100, (state.scoringTotal / 100) * 100)}%">
+                                             style="width: ${Math.min(100, (state.scoringTotal / 500) * 100)}%">
                                         </div>
                                     </div>
                                 </div>
+
+                                <!-- Current Multipliers Display -->
+                                ${state.currentBirdMultipliers.length > 0 ? `
+                                    <div class="mb-4 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg">
+                                        <div class="text-center space-y-2">
+                                            ${state.currentBirdMultipliers.map(mult => `
+                                                <div class="text-lg font-bold text-blue-700 animate-pulse">
+                                                    ${mult}
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                ` : ''}
 
                                 <!-- Birds Being Scored -->
                                 <div class="space-y-3 max-h-96 overflow-y-auto">
@@ -416,6 +628,9 @@
                                                 <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
                                                     <span class="text-lg">${obs.species_code}</span>
                                                     ${!obs.error ? `
+                                                        <span class="text-xs px-2 py-1 rounded-full font-medium bg-gray-200 text-gray-700">
+                                                            ${(obs.frequency * 100).toFixed(1)}%
+                                                        </span>
                                                         <span class="text-xs px-2.5 py-1 rounded-full font-bold shadow-sm
                                                             ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
                                                             ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
@@ -430,7 +645,11 @@
                                                 </div>
                                             </div>
                                             <div class="text-right ml-3">
-                                                ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-2xl font-bold text-blue-600">+${obs.score}</div>`}
+                                                ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `
+                                                    <div class="text-2xl font-bold text-blue-600 transition-all duration-500">
+                                                        ${idx === 0 && state.currentBirdMultipliers.length > 0 ? '+' : ''}${obs.score}
+                                                    </div>
+                                                `}
                                             </div>
                                         </div>
                                     `).join('')}
@@ -477,9 +696,8 @@
                             <!-- Score Checklist Button -->
                             <label class="block mb-6 ${!hasFreqData ? 'opacity-50 pointer-events-none' : ''}">
                                 <div class="bg-gradient-to-r from-blue-500 to-green-500 text-white rounded-xl shadow-lg p-6 text-center cursor-pointer hover:shadow-xl transition-shadow active:scale-95 transition-transform">
-                                    <div class="text-4xl mb-3">📤</div>
-                                    <div class="text-xl font-bold mb-1">Score Checklist</div>
-                                    <div class="text-sm opacity-90">Upload eBird CSV</div>
+                                    <div class="text-4xl mb-3">ðŸ“¤</div>
+                                    <div class="text-xl font-bold mb-1">Drop Your eBird Checklist</div>
                                 </div>
                                 <input
                                     id="checklistInput"
@@ -494,9 +712,17 @@
                             <!-- Alternative: Manual file selector for mobile -->
                             <button
                                 onclick="document.getElementById('checklistInput').click()"
-                                class="w-full py-3 px-4 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg font-medium mb-6 ${!hasFreqData ? 'hidden' : ''}"
+                                class="w-full py-3 px-4 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg font-medium mb-4 ${!hasFreqData ? 'hidden' : ''}"
                             >
                                 Or tap here to select CSV file
+                            </button>
+
+                            <!-- How It Works Button -->
+                            <button
+                                onclick="state.showHowItWorks = true; render();"
+                                class="w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium mb-6"
+                            >
+                                â“ How Is Score Calculated?
                             </button>
 
                             ${state.currentResult ? `
@@ -508,11 +734,11 @@
                                         </div>
                                     </div>
                                     <div class="text-sm text-gray-600 mb-4">
-                                        📅 ${state.currentResult.date} • 📍 ${state.currentResult.region} • ${state.currentResult.species_count} species
+                                        ðŸ“… ${state.currentResult.date} â€¢ ðŸ“ ${state.currentResult.region} â€¢ ${state.currentResult.species_count} species
                                     </div>
                                     <div class="space-y-3">
-                                        ${state.currentResult.observations.map(obs => `
-                                            <div class="flex items-center justify-between py-3 px-4 rounded-lg border-2 
+                                        ${state.currentResult.observations.map((obs, obsIdx) => `
+                                            <div class="rounded-lg border-2 overflow-hidden
                                                 ${!obs.error && obs.rarity_color === 'purple' ? 'border-purple-400 bg-purple-50' : ''}
                                                 ${!obs.error && obs.rarity_color === 'red' ? 'border-red-400 bg-red-50' : ''}
                                                 ${!obs.error && obs.rarity_color === 'orange' ? 'border-orange-400 bg-orange-50' : ''}
@@ -520,27 +746,71 @@
                                                 ${!obs.error && obs.rarity_color === 'gray' ? 'border-gray-300 bg-gray-50' : ''}
                                                 ${obs.error ? 'border-gray-200 bg-white' : ''}
                                             ">
-                                                <div class="flex-1">
-                                                    <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
-                                                        <span class="text-lg">${obs.species_code}</span>
-                                                        ${!obs.error ? `
-                                                            <span class="text-xs px-2.5 py-1 rounded-full font-bold shadow-sm
-                                                                ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
-                                                                ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
-                                                                ${obs.rarity_color === 'orange' ? 'bg-orange-600 text-white' : ''}
-                                                                ${obs.rarity_color === 'yellow' ? 'bg-yellow-600 text-white' : ''}
-                                                                ${obs.rarity_color === 'gray' ? 'bg-gray-600 text-white' : ''}
-                                                            ">
-                                                                ${obs.rarity.toUpperCase()}
-                                                            </span>
-                                                        ` : ''}
-                                                        ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2.5 py-1 rounded-full font-bold shadow-sm">LIFE BIRD!</span>' : ''}
+                                                <button
+                                                    onclick="state.expandedSpeciesId = state.expandedSpeciesId === '${obs.species_code}_${obsIdx}' ? null : '${obs.species_code}_${obsIdx}'; render();"
+                                                    class="w-full flex items-center justify-between py-3 px-4 hover:opacity-80 transition-opacity"
+                                                >
+                                                    <div class="flex-1 text-left">
+                                                        <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
+                                                            <span class="text-lg">${obs.species_code}</span>
+                                                            ${!obs.error ? `
+                                                                <span class="text-xs px-2 py-1 rounded-full font-medium bg-gray-200 text-gray-700">
+                                                                    ${(obs.frequency * 100).toFixed(1)}%
+                                                                </span>
+                                                                <span class="text-xs px-2.5 py-1 rounded-full font-bold shadow-sm
+                                                                    ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
+                                                                    ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
+                                                                    ${obs.rarity_color === 'orange' ? 'bg-orange-600 text-white' : ''}
+                                                                    ${obs.rarity_color === 'yellow' ? 'bg-yellow-600 text-white' : ''}
+                                                                    ${obs.rarity_color === 'gray' ? 'bg-gray-600 text-white' : ''}
+                                                                ">
+                                                                    ${obs.rarity.toUpperCase()}
+                                                                </span>
+                                                            ` : ''}
+                                                            ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2.5 py-1 rounded-full font-bold shadow-sm">LIFE BIRD!</span>' : ''}
+                                                        </div>
+                                                        ${obs.count > 1 ? `<div class="text-sm text-gray-600 font-medium">Ã—${obs.count} individuals</div>` : ''}
                                                     </div>
-                                                    ${obs.count > 1 ? `<div class="text-sm text-gray-600 font-medium">×${obs.count} individuals</div>` : ''}
-                                                </div>
-                                                <div class="text-right ml-3">
-                                                    ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-2xl font-bold text-blue-600">${obs.score}</div>`}
-                                                </div>
+                                                    <div class="text-right ml-3">
+                                                        ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-2xl font-bold text-blue-600">${obs.score}</div>`}
+                                                    </div>
+                                                </button>
+                                                
+                                                ${!obs.error && state.expandedSpeciesId === `${obs.species_code}_${obsIdx}` ? `
+                                                    <div class="border-t-2 border-gray-200 p-4 bg-white">
+                                                        <h4 class="font-bold text-gray-900 mb-3">Score Breakdown</h4>
+                                                        <div class="space-y-2 text-sm">
+                                                            <div class="flex justify-between items-center py-2 border-b border-gray-100">
+                                                                <span class="text-gray-700">Base Score (rarity)</span>
+                                                                <span class="font-bold text-blue-600">${obs.base_score}</span>
+                                                            </div>
+                                                            ${obs.seasonal_bonus > 1.0 ? `
+                                                                <div class="flex justify-between items-center py-2 border-b border-gray-100">
+                                                                    <span class="text-gray-700">Seasonal Bonus (Ã—1.5)</span>
+                                                                    <span class="font-bold text-orange-600">${Math.round(obs.base_score * obs.seasonal_bonus)}</span>
+                                                                </div>
+                                                            ` : ''}
+                                                            ${obs.novelty_multiplier !== 1.0 ? `
+                                                                <div class="flex justify-between items-center py-2 border-b border-gray-100">
+                                                                    <span class="text-gray-700">
+                                                                        ${obs.novelty_multiplier === 0.5 ? '2nd Sighting (Ã—0.5)' : 'Repeat (Ã—0.25)'}
+                                                                    </span>
+                                                                    <span class="font-bold text-purple-600">${Math.round(obs.base_score * obs.seasonal_bonus * obs.novelty_multiplier)}</span>
+                                                                </div>
+                                                            ` : ''}
+                                                            ${obs.count_multiplier > 1 ? `
+                                                                <div class="flex justify-between items-center py-2 border-b border-gray-100">
+                                                                    <span class="text-gray-700">Count (Ã—${obs.count_multiplier})</span>
+                                                                    <span class="font-bold text-green-600">${obs.score}</span>
+                                                                </div>
+                                                            ` : ''}
+                                                            <div class="flex justify-between items-center py-3 bg-blue-50 rounded px-3 mt-3">
+                                                                <span class="font-bold text-gray-900">Final Score</span>
+                                                                <span class="text-2xl font-bold text-blue-600">${obs.score}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ` : ''}
                                             </div>
                                         `).join('')}
                                     </div>
@@ -551,7 +821,7 @@
                                 onclick="resetData()"
                                 class="w-full py-2 text-sm text-red-600 hover:text-red-700"
                             >
-                                Reset All Data
+                                Start Fresh
                             </button>
                         ` : `
                             <!-- History View -->
@@ -564,12 +834,12 @@
                                             class="w-full p-4 text-left hover:bg-gray-50 transition-colors"
                                         >
                                             <div class="flex items-center justify-between mb-2">
-                                                <div class="text-sm text-gray-600">📅 ${checklist.date}</div>
+                                                <div class="text-sm text-gray-600">ðŸ“… ${checklist.date}</div>
                                                 <div class="text-xl font-bold text-blue-600">${checklist.total_score}</div>
                                             </div>
                                             <div class="text-sm text-gray-600 flex items-center justify-between">
-                                                <span>📍 ${checklist.region} • ${checklist.species_count} species</span>
-                                                <span class="text-gray-400">${state.expandedChecklistId === checklist.id ? '▼' : '▶'}</span>
+                                                <span>ðŸ“ ${checklist.region} â€¢ ${checklist.species_count} species</span>
+                                                <span class="text-gray-400">${state.expandedChecklistId === checklist.id ? 'â–¼' : 'â–¶'}</span>
                                             </div>
                                         </button>
                                         
@@ -589,6 +859,9 @@
                                                                 <div class="font-bold text-gray-900 flex items-center gap-2 flex-wrap mb-1">
                                                                     <span class="text-base">${obs.species_code}</span>
                                                                     ${!obs.error ? `
+                                                                        <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-200 text-gray-700">
+                                                                            ${(obs.frequency * 100).toFixed(1)}%
+                                                                        </span>
                                                                         <span class="text-xs px-2 py-0.5 rounded-full font-bold
                                                                             ${obs.rarity_color === 'purple' ? 'bg-purple-600 text-white' : ''}
                                                                             ${obs.rarity_color === 'red' ? 'bg-red-600 text-white' : ''}
@@ -601,7 +874,7 @@
                                                                     ` : ''}
                                                                     ${obs.is_first_sighting ? '<span class="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full font-bold">LIFE!</span>' : ''}
                                                                 </div>
-                                                                ${obs.count > 1 ? `<div class="text-xs text-gray-600">×${obs.count}</div>` : ''}
+                                                                ${obs.count > 1 ? `<div class="text-xs text-gray-600">Ã—${obs.count}</div>` : ''}
                                                             </div>
                                                             <div class="text-right ml-3">
                                                                 ${obs.error ? `<div class="text-xs text-red-600">${obs.error}</div>` : `<div class="text-lg font-bold text-blue-600">${obs.score}</div>`}
@@ -625,14 +898,14 @@
                                 onclick="state.view = 'home'; render();"
                                 class="flex flex-col items-center py-2 px-4 ${state.view === 'home' ? 'text-blue-600' : 'text-gray-600'}"
                             >
-                                <span class="text-2xl">🏆</span>
+                                <span class="text-2xl">ðŸ†</span>
                                 <span class="text-xs mt-1">Score</span>
                             </button>
                             <button
                                 onclick="state.view = 'history'; render();"
                                 class="flex flex-col items-center py-2 px-4 ${state.view === 'history' ? 'text-blue-600' : 'text-gray-600'}"
                             >
-                                <span class="text-2xl">📋</span>
+                                <span class="text-2xl">ðŸ“‹</span>
                                 <span class="text-xs mt-1">History</span>
                             </button>
                         </div>
@@ -645,6 +918,4 @@
         loadData();
     </script>
 </body>
-
 </html>
-
