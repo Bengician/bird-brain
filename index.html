@@ -50,13 +50,9 @@
                 const { data: profiles } = await db.from('profiles').select('username');
                 if (profiles) state.users = profiles.map(p => p.username);
 
-                const cachedFreq = localStorage.getItem('frequency_data');
-                if (cachedFreq) {
-                    state.frequencyData = JSON.parse(cachedFreq);
-                    state.regions = JSON.parse(localStorage.getItem('regions') || '[]');
-                } else {
-                    await fetchFrequencyData();
-                }
+                // ALWAYS fetch fresh frequency data from GitHub on load
+                // This ensures new regions like Santa Barbara appear automatically
+                await fetchFrequencyData();
 
                 const savedUser = localStorage.getItem('current_user');
                 if (savedUser && state.users.includes(savedUser)) {
@@ -64,7 +60,16 @@
                 } else {
                     state.showUserSelect = true;
                 }
-            } catch (error) { console.error('Initial load error:', error); }
+            } catch (error) { 
+                console.error('Initial load error:', error);
+                
+                // Fallback: If GitHub is down, try to use cached data
+                const cachedFreq = localStorage.getItem('frequency_data');
+                if (cachedFreq) {
+                    state.frequencyData = JSON.parse(cachedFreq);
+                    state.regions = JSON.parse(localStorage.getItem('regions') || '[]');
+                }
+            }
             state.loading = false;
             render();
         }
