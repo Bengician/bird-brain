@@ -1,212 +1,72 @@
 # 🐦 Bird Brain
 
-**Bird Brain** is a browser-based web app that turns your eBird checklists into a game. Upload a CSV exported from eBird, and Bird Brain calculates a **score** based on rarity, seasonality, novelty, and count — rewarding rare birds, life birds, and out-of-season sightings.
+**Bird Brain** is a premium, browser-based web app that turns your eBird checklists into a competitive "Rank" score. Upload a CSV exported from eBird, and Bird Brain calculates a score based on rarity, seasonal scarcity, novelty bonuses, and flock multipliers.
 
-Everything runs **entirely in the browser**. No accounts, no backend, no tracking.
+Unlike the original version, this build features **Cloud Sync** via Supabase, allowing you to manage multiple birding profiles and keep your history safe.
 
 ---
 
 ## ✨ Features
 
-- 📤 Upload eBird CSV checklists  
-- 🧮 Intelligent scoring based on:
-  - Rarity
-  - Seasonality
-  - Life birds & repeat sightings
-  - Number of individuals observed
-- 🗺️ Region-specific frequency data
-- 📊 Detailed per-species score breakdown
-- 🏆 Lifetime stats (total score, species, observations)
-- 📋 Checklist history with expandable details
-- 💾 Persistent storage using `localStorage`
-- 📱 Mobile-friendly UI built with Tailwind CSS
+- 📤 **eBird CSV Integration**: Seamlessly upload checklists exported directly from eBird.
+- ☁️ **Cloud Profiles**: Create and switch between multiple user profiles (e.g., Birding Partners) with data synced to a Supabase backend.
+- 🧮 **Advanced Scoring Engine (v3.2)**:
+  - **Rarity Curve**: Exponential scoring based on regional frequency data.
+  - **Seasonal Scarcity**: 1.5× bonus for out-of-season sightings.
+  - **Novelty Bonuses**: Rewards for new discoveries (400% for Life Birds, 200% for second sightings).
+  - **Flock Multipliers**: Linear multipliers for high-volume counts.
+- 📊 **Dynamic Breakdowns**: Expand any species to see the exact math (Base × Season × Novelty × Count) behind its score.
+- 📋 **Deep History**: Review previous checklists with full color-coded rarity badges and score breakdowns.
+- 📱 **Modern UI**: A "glassmorphism" mobile-first design built with Tailwind CSS.
 
 ---
 
-## 🚀 Live Demo
+## 🧠 How Scoring Works (v3.2)
 
-If hosted via GitHub Pages:
+The algorithm is designed to feel rewarding. Instead of punishing repeat sightings, it provides massive "Booster" bonuses for new discoveries.
 
-```
-https://<your-username>.github.io/bird-brain/
-```
-
----
-
-## 🧠 How Scoring Works
-
-Each observation receives a score based on four components:
-
-### 1️⃣ Base Score (Rarity)
-
+### 1️⃣ Base Score (The Rarity Curve)
 Calculated using a logarithmic scale from regional frequency data:
+`Base Score = 10 × log10(1 / frequency) × 10`
 
-```
-Base Score = 100 × log10(1 / frequency)
-```
+### 2️⃣ Seasonal Scarcity (1.5× Bonus)
+Birds found outside their peak frequency window (less than 25% of their annual peak) receive a **1.5× multiplier**.
 
-Examples:
-- 1% frequency → ~200 points  
-- 10% frequency → ~100 points  
-- 50% frequency → ~30 points  
+### 3️⃣ Novelty Bonuses
+The more unique a bird is to your personal history, the higher the bonus:
+- **Life Bird (1st Sighting):** 400% Score
+- **2nd Sighting:** 200% Score
+- **Repeats (3rd+):** 100% Score
 
----
-
-### 2️⃣ Seasonal Bonus
-
-Out-of-season birds earn a **1.5× multiplier**.
-
-Applied when:
-
-```
-weekly frequency < 25% of annual peak frequency
-```
-
----
-
-### 3️⃣ Novelty Multiplier
-
-Rewards diminish with repeated sightings:
-
-| Sighting | Multiplier |
-|--------|------------|
-| First (Life Bird) | 1.0× |
-| Second | 0.5× |
-| Third+ | 0.25× |
-
----
-
-### 4️⃣ Count Multiplier
-
-Score is multiplied by the number of individuals observed:
-
-```
-Final Score = Base × Seasonal × Novelty × Count
-```
+### 4️⃣ Flock Multiplier (Linear)
+The score for the observation is multiplied by the number of individuals recorded.
+`Final Score = Base × Season × Novelty × Count`
 
 ---
 
 ## 🏷️ Rarity Tiers
 
-| Tier | Frequency |
-|---|---|
-| **Mega Rare** | < 2% |
-| **Rare** | < 10% |
-| **Scarce** | < 20% |
-| **Uncommon** | < 30% |
-| **Common** | ≥ 30% |
+| Tier | Frequency | Color Code |
+|---|---|---|
+| **Mega Rare** | < 2% | Purple |
+| **Rare** | < 10% | Red |
+| **Scarce** | < 20% | Orange |
+| **Uncommon** | < 30% | Yellow |
+| **Common** | ≥ 30% | Gray |
+
+
 
 ---
 
-## 📂 CSV Requirements
+## 🛠️ Setup & Configuration
 
-Bird Brain expects a CSV exported from **eBird** with the following columns:
+This app requires a **Supabase** project to handle user profiles and data persistence.
 
-| Column Name | Required |
-|-----------|----------|
-| `Species` | ✅ |
-| `Observation Date` | ✅ |
-| `Count` | ✅ |
-
-Notes:
-- A count of `X` is treated as `1`
-- One checklist = one date
-- Species names must match those used in the frequency dataset
-
----
-
-## 🌍 Regional Data
-
-Bird Brain uses precomputed weekly frequency data by region.
-
-- Data is fetched from `frequency_data.json`
-- Regions are derived automatically
-- Users select the region when uploading a checklist
-- Data is cached in `localStorage` for offline reuse
-
----
-
-## 🛠️ Tech Stack
-
-- HTML / Vanilla JavaScript
-- Tailwind CSS (via CDN)
-- No frameworks
-- No backend
-- No build step
-
----
-
-## 📦 Local Development
-
-Clone the repo:
-
-```bash
-git clone https://github.com/<your-username>/bird-brain.git
-cd bird-brain
-```
-
-Open directly in your browser:
-
-```bash
-open index.html
-```
-
-Or serve locally:
-
-```bash
-python -m http.server
-```
-
-Then visit:
-
-```
-http://localhost:8000
-```
-
----
-
-## 💾 Data Storage
-
-All data is stored locally in your browser:
-
-- Checklist history
-- Observation history
-- Frequency data cache
-- Selected regions
-
-Clearing browser storage will reset the app.
-
----
-
-## ⚠️ Limitations & Notes
-
-- This is **not** an official eBird product
-- Scores are for fun, not scientific comparison
-- Species name mismatches may result in “No data” warnings
-- Frequency accuracy depends on the underlying dataset
-
----
-
-## 🧩 Future Ideas
-
-- Leaderboards
-- Per-year scoring
-- Region auto-detection
-- Species search & filters
-- Sync across devices
-- Custom scoring rules
-
----
-
-## 📜 License
-
-MIT License  
-Feel free to fork, modify, and build on it.
-
----
-
-## 🙌 Credits
-
-- Frequency data derived from eBird observations
-- UI built with Tailwind CSS
-- Inspired by birding, gaming, and friendly competition
+1. **Create a Supabase Project**: Head to [supabase.com](https://supabase.com).
+2. **Database Tables**: Create the following tables:
+   - `profiles`: Columns `username` (text, unique).
+   - `checklist_data`: Columns `username` (text, primary key), `data` (jsonb), `history` (jsonb), `updated_at` (timestamp).
+3. **Insert Credentials**: Update the following constants in the `index.html` file:
+   ```javascript
+   const SB_URL = 'YOUR_SUPABASE_URL_HERE';
+   const SB_KEY = 'YOUR_SUPABASE_ANON_KEY_HERE';
