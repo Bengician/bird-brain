@@ -289,7 +289,7 @@
                     <div class=\"bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all\">
                         <div class=\"text-5xl mb-3\">📤</div><div class=\"text-2xl\">Upload eBird CSV</div>
                     </div>
-                    <input type=\"file\" accept=\".csv\" onchange=\"handleUpload(event)\" class=\"hidden\" />
+                    <input type="file" accept=".csv, text/csv, application/csv, text/comma-separated-values, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="handleUpload(event)" class="hidden" />
                 </label>
                 <button onclick=\"state.showHowItWorks=true;render()\" class=\"w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors\">How is Score Calculated?</button>
                 ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class=\"text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl\">No data uploaded yet.</div>`}
