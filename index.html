@@ -198,23 +198,51 @@
 
         async function processChecklist(region) {
             const text = await pendingFile.text();
-            const lines = text.split('\n');
+            // 1. Fix line splitting for iPhone (\r vs \n)
+            const lines = text.split(/\r?\n|\r/);
+            
+            // 2. Trim headers to remove hidden characters
             const headers = lines[0].split(',').map(h => h.trim());
-            const sIdx = headers.indexOf('Species'), dIdx = headers.indexOf('Observation Date'), cIdx = headers.indexOf('Count');
+            const sIdx = headers.indexOf('Species'), 
+                dIdx = headers.indexOf('Observation Date'), 
+                cIdx = headers.indexOf('Count');
+                
             const results = [];
             const tempHistory = [...state.userHistory];
             let total = 0, date = null;
+
             for (let i = 1; i < lines.length; i++) {
                 if (!lines[i].trim()) continue;
+
+                // 3. Trim every single column value
                 const cols = lines[i].split(',').map(c => c.trim());
-                const count = cols[cIdx] === 'X' || !cols[cIdx] ? 1 : parseInt(cols[cIdx]);
+                
+                // Ensure count is a clean number
+                const countRaw = cols[cIdx];
+                const count = countRaw === 'X' || !countRaw ? 1 : parseInt(countRaw);
+                
                 if (!date) date = cols[dIdx];
+
                 const res = scoreObservation(cols[sIdx], cols[dIdx], count, tempHistory, state.frequencyData, region);
                 results.push(res);
                 total += res.score;
-                if (!res.error) for(let j=0; j<count; j++) tempHistory.push({date: cols[dIdx], species_code: cols[sIdx]});
+
+                if (!res.error) {
+                    for(let j=0; j<count; j++) {
+                        tempHistory.push({date: cols[dIdx], species_code: cols[sIdx]});
+                    }
+                }
             }
-            state.checklists = [{ id: Date.now(), date, region, total_score: total, species_count: results.length, observations: results }, ...state.checklists];
+            
+            state.checklists = [{ 
+                id: Date.now(), 
+                date, 
+                region, 
+                total_score: total, 
+                species_count: results.length, 
+                observations: results 
+            }, ...state.checklists];
+            
             state.userHistory = tempHistory;
             state.currentResult = state.checklists[0];
             state.showRegionPrompt = false;
