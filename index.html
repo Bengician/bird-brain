@@ -50,8 +50,6 @@
                 const { data: profiles } = await db.from('profiles').select('username');
                 if (profiles) state.users = profiles.map(p => p.username);
 
-                // ALWAYS fetch fresh frequency data from GitHub on load
-                // This ensures new regions like Santa Barbara appear automatically
                 await fetchFrequencyData();
 
                 const savedUser = localStorage.getItem('current_user');
@@ -62,8 +60,6 @@
                 }
             } catch (error) { 
                 console.error('Initial load error:', error);
-                
-                // Fallback: If GitHub is down, try to use cached data
                 const cachedFreq = localStorage.getItem('frequency_data');
                 if (cachedFreq) {
                     state.frequencyData = JSON.parse(cachedFreq);
@@ -197,29 +193,42 @@
         }
 
         async function processChecklist(region) {
-            const text = await pendingFile.text();
-            // 1. Fix line splitting for iPhone (\r vs \n)
-            const lines = text.split(/\r?\n|\r/);
+            let text = await pendingFile.text();
             
-            // 2. Trim headers to remove hidden characters
-            const headers = lines[0].split(',').map(h => h.trim());
+            // Fix for iPhone hidden encoding characters
+            text = text.replace(/^\uFEFF/, '').trim();
+            
+            // Split lines handling all mobile line-ending variations
+            const lines = text.split(/\r?\n|\r/);
+            if (lines.length < 2) return alert("Empty or invalid CSV file.");
+
+            // Trim and clean headers
+            const headers = lines[0].split(',').map(h => h.trim().replace(/["']/g, ""));
             const sIdx = headers.indexOf('Species'), 
                 dIdx = headers.indexOf('Observation Date'), 
                 cIdx = headers.indexOf('Count');
+
+            if (sIdx === -1 || dIdx === -1 || cIdx === -1) {
+                return alert("Required columns missing. Please use a standard eBird CSV.");
+            }
                 
             const results = [];
             const tempHistory = [...state.userHistory];
             let total = 0, date = null;
 
             for (let i = 1; i < lines.length; i++) {
-                if (!lines[i].trim()) continue;
+                const line = lines[i].trim();
+                if (!line) continue;
 
-                // 3. Trim every single column value
-                const cols = lines[i].split(',').map(c => c.trim());
+                // Split and clean columns
+                const cols = line.split(',').map(c => c.trim().replace(/["']/g, ""));
                 
-                // Ensure count is a clean number
                 const countRaw = cols[cIdx];
-                const count = countRaw === 'X' || !countRaw ? 1 : parseInt(countRaw);
+                let count = 1;
+                if (countRaw && countRaw.toUpperCase() !== 'X') {
+                    const parsed = parseInt(countRaw, 10);
+                    if (!isNaN(parsed)) count = parsed;
+                }
                 
                 if (!date) date = cols[dIdx];
 
@@ -233,7 +242,7 @@
                     }
                 }
             }
-            
+                
             state.checklists = [{ 
                 id: Date.now(), 
                 date, 
@@ -262,14 +271,14 @@
             };
 
             app.innerHTML = `
-                <div class=\"min-h-screen bg-gray-50 pb-24\">
-                    <div class=\"glass border-b p-4 sticky top-0 z-40 flex justify-between items-center shadow-sm\">
-                        <h1 class=\"text-xl font-bold tracking-tight text-gray-900\">🐦 Bird Brain</h1>
-                        ${state.currentUser ? `<button onclick=\"state.showUserSelect=true;render()\" class=\"text-sm bg-white border px-3 py-1 rounded-full font-bold shadow-sm\">👤 ${state.currentUser}</button>` : ''}
+                <div class="min-h-screen bg-gray-50 pb-24">
+                    <div class="glass border-b p-4 sticky top-0 z-40 flex justify-between items-center shadow-sm">
+                        <h1 class="text-xl font-bold tracking-tight text-gray-900">🐦 Bird Brain</h1>
+                        ${state.currentUser ? `<button onclick="state.showUserSelect=true;render()" class="text-sm bg-white border px-3 py-1 rounded-full font-bold shadow-sm">👤 ${state.currentUser}</button>` : ''}
                     </div>
 
-                    <div class=\"max-w-2xl mx-auto p-4\">
-                        ${state.loading ? '<div class=\"text-center p-20 animate-pulse font-bold text-gray-300\">SYNCING CLOUD...</div>' : (
+                    <div class="max-w-2xl mx-auto p-4">
+                        ${state.loading ? '<div class="text-center p-20 animate-pulse font-bold text-gray-300">SYNCING CLOUD...</div>' : (
                             state.showUserSelect ? renderUserSelect() : (state.view === 'home' ? renderHome(stats) : renderHistory())
                         )}
                     </div>
@@ -277,9 +286,9 @@
                     ${state.showRegionPrompt ? renderRegionPrompt() : ''}
                     ${state.showHowItWorks ? renderHowItWorks() : ''}
                     ${!state.showUserSelect ? `
-                        <div class=\"fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40\">
-                            <button onclick=\"state.view='home';render()\" class=\"p-2 flex flex-col items-center ${state.view==='home'?'text-blue-600 font-bold':'text-gray-600'}\"><span class=\"text-xl\">🏆</span><span class=\"text-[10px] uppercase tracking-widest mt-1\">Score</span></button>
-                            <button onclick=\"state.view='history';render()\" class=\"p-2 flex flex-col items-center ${state.view==='history'?'text-blue-600 font-bold':'text-gray-600'}\"><span class=\"text-xl\">📋</span><span class=\"text-[10px] uppercase tracking-widest mt-1\">History</span></button>
+                        <div class="fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40">
+                            <button onclick="state.view='home';render()" class="p-2 flex flex-col items-center ${state.view==='home'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🏆</span><span class="text-[10px] uppercase tracking-widest mt-1">Score</span></button>
+                            <button onclick="state.view='history';render()" class="p-2 flex flex-col items-center ${state.view==='history'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">📋</span><span class="text-[10px] uppercase tracking-widest mt-1">History</span></button>
                         </div>
                     ` : ''}
                 </div>
@@ -288,19 +297,19 @@
 
         function renderUserSelect() {
             return `
-                <div class=\"bg-white p-8 rounded-3xl shadow-xl max-w-md mx-auto mt-10\">
-                    <div class=\"flex justify-between items-center mb-6\">
-                        <h2 class=\"font-black text-2xl text-gray-900\">Profiles</h2>
-                        <button onclick=\"state.showManageUsers = !state.showManageUsers; render();\" class=\"text-xs bg-gray-100 px-3 py-1 rounded-full font-bold uppercase tracking-tighter\">
+                <div class="bg-white p-8 rounded-3xl shadow-xl max-w-md mx-auto mt-10">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="font-black text-2xl text-gray-900">Profiles</h2>
+                        <button onclick="state.showManageUsers = !state.showManageUsers; render();" class="text-xs bg-gray-100 px-3 py-1 rounded-full font-bold uppercase tracking-tighter">
                             ${state.showManageUsers ? 'Done' : 'Edit'}
                         </button>
                     </div>
-                    <div class=\"space-y-3 mb-8\">
-                        ${state.users.map(u => `<div class=\"flex gap-2\"><button onclick=\"selectUser('${u}')\" class=\"flex-1 p-5 border-2 rounded-2xl font-black text-lg hover:border-blue-500 hover:bg-blue-50 text-left transition-all\">🐦 ${u}</button>${state.showManageUsers ? `<button onclick=\"deleteUser('${u}')\" class=\"bg-red-50 text-red-600 border-2 border-red-100 px-4 rounded-2xl font-bold\">✕</button>` : ''}</div>`).join('')}
+                    <div class="space-y-3 mb-8">
+                        ${state.users.map(u => `<div class="flex gap-2"><button onclick="selectUser('${u}')" class="flex-1 p-5 border-2 rounded-2xl font-black text-lg hover:border-blue-500 hover:bg-blue-50 text-left transition-all">🐦 ${u}</button>${state.showManageUsers ? `<button onclick="deleteUser('${u}')" class="bg-red-50 text-red-600 border-2 border-red-100 px-4 rounded-2xl font-bold">✕</button>` : ''}</div>`).join('')}
                     </div>
-                    <div class=\"flex gap-2 border-t pt-6\">
-                        <input id=\"newU\" type=\"text\" placeholder=\"Add Birding Partner\" class=\"flex-1 border-2 p-3 rounded-xl outline-none focus:border-blue-500 transition-all\" />
-                        <button onclick=\"createUser(document.getElementById('newU').value)\" class=\"bg-blue-600 text-white px-6 rounded-xl font-bold shadow-lg shadow-blue-200\">Add</button>
+                    <div class="flex gap-2 border-t pt-6">
+                        <input id="newU" type="text" placeholder="Add Birding Partner" class="flex-1 border-2 p-3 rounded-xl outline-none focus:border-blue-500 transition-all" />
+                        <button onclick="createUser(document.getElementById('newU').value)" class="bg-blue-600 text-white px-6 rounded-xl font-bold shadow-lg shadow-blue-200">Add</button>
                     </div>
                 </div>
             `;
@@ -308,31 +317,31 @@
 
         function renderHome(stats) {
             return `
-                <div class=\"grid grid-cols-3 gap-3 mb-6\">
-                    <div class=\"bg-white p-4 rounded-2xl shadow-sm border text-center\"><div class=\"text-2xl font-black text-blue-600\">${stats.obs}</div><div class=\"text-[10px] uppercase font-bold text-gray-400\">Sightings</div></div>
-                    <div class=\"bg-white p-4 rounded-2xl shadow-sm border text-center\"><div class=\"text-2xl font-black text-green-600\">${stats.spec}</div><div class=\"text-[10px] uppercase font-bold text-gray-400\">Species</div></div>
-                    <div class=\"bg-white p-4 rounded-2xl shadow-sm border text-center\"><div class=\"text-2xl font-black text-yellow-500\">${stats.score.toLocaleString()}</div><div class=\"text-[10px] uppercase font-bold text-gray-400\">Total Score</div></div>
+                <div class="grid grid-cols-3 gap-3 mb-6">
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-blue-600">${stats.obs}</div><div class="text-[10px] uppercase font-bold text-gray-400">Sightings</div></div>
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-green-600">${stats.spec}</div><div class="text-[10px] uppercase font-bold text-gray-400">Species</div></div>
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-yellow-500">${stats.score.toLocaleString()}</div><div class="text-[10px] uppercase font-bold text-gray-400">Total Score</div></div>
                 </div>
-                <label class=\"block mb-4 cursor-pointer group\">
-                    <div class=\"bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all\">
-                        <div class=\"text-5xl mb-3\">📤</div><div class=\"text-2xl\">Upload eBird CSV</div>
+                <label class="block mb-4 cursor-pointer group">
+                    <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all">
+                        <div class="text-5xl mb-3">📤</div><div class="text-2xl">Upload eBird CSV</div>
                     </div>
                     <input type="file" accept=".csv, text/csv, application/csv, text/comma-separated-values, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="handleUpload(event)" class="hidden" />
                 </label>
-                <button onclick=\"state.showHowItWorks=true;render()\" class=\"w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors\">How is Score Calculated?</button>
-                ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class=\"text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl\">No data uploaded yet.</div>`}
+                <button onclick="state.showHowItWorks=true;render()" class="w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors">How is Score Calculated?</button>
+                ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class="text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl">No data uploaded yet.</div>`}
             `;
         }
 
         function renderChecklistCard(c, isLatest) {
             return `
-                <div class=\"bg-white p-6 rounded-3xl shadow-xl border\">
-                    <div class=\"flex justify-between items-center mb-1\">
-                        <h2 class=\"font-black text-xl text-gray-900\">${isLatest ? 'Last Checklist' : ''}</h2>
-                        <div class=\"text-3xl font-black text-blue-600\">${c.total_score.toLocaleString()}</div>
+                <div class="bg-white p-6 rounded-3xl shadow-xl border">
+                    <div class="flex justify-between items-center mb-1">
+                        <h2 class="font-black text-xl text-gray-900">${isLatest ? 'Last Checklist' : ''}</h2>
+                        <div class="text-3xl font-black text-blue-600">${c.total_score.toLocaleString()}</div>
                     </div>
-                    <div class=\"text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6\">📅 ${c.date} • 📍 ${c.region}</div>
-                    <div class=\"space-y-2\">
+                    <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6">📅 ${c.date} • 📍 ${c.region}</div>
+                    <div class="space-y-2">
                         ${c.observations.map((o, i) => renderObservationRow(o, i, 'home')).join('')}
                     </div>
                 </div>
@@ -344,27 +353,27 @@
             const isExpanded = state.expandedSpeciesId === uniqueId;
             
             return `
-                <div class=\"border-2 border-${o.rarity_color}-100 bg-${o.rarity_color}-50 rounded-2xl overflow-hidden transition-all\">
-                    <button onclick=\"state.expandedSpeciesId = (state.expandedSpeciesId === '${uniqueId}' ? null : '${uniqueId}'); render()\" class=\"w-full p-4 flex justify-between items-center\">
-                        <div class=\"text-left\">
-                            <div class=\"font-black text-gray-800 text-lg flex items-center gap-2\">
+                <div class="border-2 border-${o.rarity_color}-100 bg-${o.rarity_color}-50 rounded-2xl overflow-hidden transition-all">
+                    <button onclick="state.expandedSpeciesId = (state.expandedSpeciesId === '${uniqueId}' ? null : '${uniqueId}'); render()" class="w-full p-4 flex justify-between items-center">
+                        <div class="text-left">
+                            <div class="font-black text-gray-800 text-lg flex items-center gap-2">
                                 ${o.species_code} 
-                                <span class=\"text-[10px] bg-${o.rarity_color}-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-tighter\">${o.rarity}</span>
+                                <span class="text-[10px] bg-${o.rarity_color}-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-tighter">${o.rarity}</span>
                             </div>
-                            <div class=\"flex items-center gap-2 mt-0.5\">
-                                ${o.is_first ? '<span class=\"text-[10px] font-black text-green-600 uppercase\">Life Bird! (4x Bonus)</span>' : (o.is_second ? '<span class=\"text-[10px] font-black text-blue-500 uppercase\">2nd Sighting (2x Bonus)</span>' : '')}
-                                ${o.count_multiplier > 1 ? `<span class=\"text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-md font-black border border-green-200 uppercase\">x${o.count_multiplier}</span>` : ''}
+                            <div class="flex items-center gap-2 mt-0.5">
+                                ${o.is_first ? '<span class="text-[10px] font-black text-green-600 uppercase">Life Bird! (4x Bonus)</span>' : (o.is_second ? '<span class="text-[10px] font-black text-blue-500 uppercase">2nd Sighting (2x Bonus)</span>' : '')}
+                                ${o.count_multiplier > 1 ? `<span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-md font-black border border-green-200 uppercase">x${o.count_multiplier}</span>` : ''}
                             </div>
                         </div>
-                        <div class=\"font-black text-xl text-blue-800\">${o.score.toLocaleString()}</div>
+                        <div class="font-black text-xl text-blue-800">${o.score.toLocaleString()}</div>
                     </button>
                     ${isExpanded ? `
-                        <div class=\"p-4 border-t bg-white text-[11px] space-y-2 text-gray-600 animate-fadeIn\">
-                            <div class=\"flex justify-between\"><span>Base Score</span><span class=\"font-bold text-blue-600\">${o.base_score}</span></div>
-                            <div class=\"flex justify-between\"><span>Seasonal Multiplier</span><span class=\"font-bold text-orange-500\">×${o.seasonal_bonus}</span></div>
-                            <div class=\"flex justify-between\"><span>Novelty Multiplier</span><span class=\"font-bold text-purple-600\">×${o.novelty_multiplier}</span></div>
-                            <div class=\"flex justify-between text-gray-800\"><span>Observation Multiplier</span><span class=\"font-bold text-green-600\">×${o.count_multiplier}</span></div>
-                            <div class=\"flex justify-between font-black border-t pt-2 text-gray-900 text-sm\"><span>Final Points</span><span>${o.score.toLocaleString()}</span></div>
+                        <div class="p-4 border-t bg-white text-[11px] space-y-2 text-gray-600 animate-fadeIn">
+                            <div class="flex justify-between"><span>Base Score</span><span class="font-bold text-blue-600">${o.base_score}</span></div>
+                            <div class="flex justify-between"><span>Seasonal Multiplier</span><span class="font-bold text-orange-500">×${o.seasonal_bonus}</span></div>
+                            <div class="flex justify-between"><span>Novelty Multiplier</span><span class="font-bold text-purple-600">×${o.novelty_multiplier}</span></div>
+                            <div class="flex justify-between text-gray-800"><span>Observation Multiplier</span><span class="font-bold text-green-600">×${o.count_multiplier}</span></div>
+                            <div class="flex justify-between font-black border-t pt-2 text-gray-900 text-sm"><span>Final Points</span><span>${o.score.toLocaleString()}</span></div>
                         </div>
                     ` : ''}
                 </div>
@@ -373,39 +382,39 @@
 
         function renderHistory() {
             return `
-                <div class=\"flex justify-between items-end mb-6\">
-                    <h2 class=\"font-black text-3xl text-gray-900\">History</h2>
-                    <button onclick=\"if(confirm('Wipe History?')) { state.checklists=[]; state.userHistory=[]; state.currentResult=null; saveData(); render(); }\" class=\"text-[10px] font-black text-red-400 uppercase tracking-widest\">Clear All</button>
+                <div class="flex justify-between items-end mb-6">
+                    <h2 class="font-black text-3xl text-gray-900">History</h2>
+                    <button onclick="if(confirm('Wipe History?')) { state.checklists=[]; state.userHistory=[]; state.currentResult=null; saveData(); render(); }" class="text-[10px] font-black text-red-400 uppercase tracking-widest">Clear All</button>
                 </div>
-                <div class=\"space-y-4\">
+                <div class="space-y-4">
                     ${state.checklists.map(c => `
-                        <div class=\"bg-white rounded-3xl shadow-sm border overflow-hidden\">
-                            <button onclick=\"state.expandedChecklistId = (state.expandedChecklistId === ${c.id} ? null : ${c.id}); render();\" class=\"w-full p-5 flex justify-between items-center hover:bg-gray-50 transition-colors\">
-                                <div class=\"text-left\"><div class=\"text-[10px] text-gray-400 font-bold uppercase tracking-tighter\">${c.date}</div><div class=\"font-black text-gray-800\">${c.region}</div></div>
-                                <div class=\"flex items-center gap-3\"><div class=\"text-2xl font-black text-blue-600\">${c.total_score.toLocaleString()}</div><span class=\"text-gray-300 font-bold\">${state.expandedChecklistId === c.id ? '▲' : '▼'}</span></div>
+                        <div class="bg-white rounded-3xl shadow-sm border overflow-hidden">
+                            <button onclick="state.expandedChecklistId = (state.expandedChecklistId === ${c.id} ? null : ${c.id}); render();" class="w-full p-5 flex justify-between items-center hover:bg-gray-50 transition-colors">
+                                <div class="text-left"><div class="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">${c.date}</div><div class="font-black text-gray-800">${c.region}</div></div>
+                                <div class="flex items-center gap-3"><div class="text-2xl font-black text-blue-600">${c.total_score.toLocaleString()}</div><span class="text-gray-300 font-bold">${state.expandedChecklistId === c.id ? '▲' : '▼'}</span></div>
                             </button>
                             ${state.expandedChecklistId === c.id ? `
-                                <div class=\"bg-gray-50 border-t p-4 space-y-3 animate-fadeIn\">
+                                <div class="bg-gray-50 border-t p-4 space-y-3 animate-fadeIn">
                                     ${c.observations.map((o, idx) => renderObservationRow(o, idx, 'history_' + c.id)).join('')}
                                 </div>
                             ` : ''}
                         </div>
                     `).join('')}
-                    ${state.checklists.length === 0 ? '<div class=\"text-center py-20 text-gray-300 font-bold\">No history available.</div>' : ''}
+                    ${state.checklists.length === 0 ? '<div class="text-center py-20 text-gray-300 font-bold">No history available.</div>' : ''}
                 </div>
             `;
         }
 
         function renderRegionPrompt() {
             return `
-                <div class=\"fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50\">
-                    <div class=\"bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl\">
-                        <h2 class=\"font-black text-2xl mb-2 text-gray-900\">Location</h2>
-                        <p class=\"text-gray-400 text-sm mb-6\">Frequencies vary by region.</p>
-                        <div class=\"space-y-1\">
-                            ${state.regions.map(r => `<button onclick=\"processChecklist('${r}')\" class=\"w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between\"><span>${r}</span><span class=\"text-blue-500\">→</span></button>`).join('')}
+                <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+                    <div class="bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl">
+                        <h2 class="font-black text-2xl mb-2 text-gray-900">Location</h2>
+                        <p class="text-gray-400 text-sm mb-6">Frequencies vary by region.</p>
+                        <div class="space-y-1">
+                            ${state.regions.map(r => `<button onclick="processChecklist('${r}')" class="w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between"><span>${r}</span><span class="text-blue-500">→</span></button>`).join('')}
                         </div>
-                        <button onclick=\"state.showRegionPrompt=false; render();\" class=\"w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest\">Back</button>
+                        <button onclick="state.showRegionPrompt=false; render();" class="w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest">Back</button>
                     </div>
                 </div>
             `;
@@ -413,38 +422,38 @@
 
         function renderHowItWorks() {
             return `
-                <div class=\"fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-6 z-50\">
-                    <div class=\"bg-white rounded-[40px] p-10 max-w-md shadow-2xl relative overflow-hidden\">
-                        <div class=\"absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16\"></div>
-                        <h2 class=\"font-black text-4xl mb-2 text-gray-900\">How Scoring Works</h2>
-                        <p class=\"text-blue-600 font-bold mb-8 uppercase tracking-widest text-xs italic\">Algorithm v3.2</p>
+                <div class="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-6 z-50">
+                    <div class="bg-white rounded-[40px] p-10 max-w-md shadow-2xl relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16"></div>
+                        <h2 class="font-black text-4xl mb-2 text-gray-900">How Scoring Works</h2>
+                        <p class="text-blue-600 font-bold mb-8 uppercase tracking-widest text-xs italic">Algorithm v3.2</p>
                         
-                        <div class=\"space-y-6\">
-                            <div class=\"flex gap-4\">
-                                <div class=\"text-3xl bg-blue-50 w-14 h-14 rounded-2xl flex items-center justify-center\">📉</div>
-                                <div><h4 class=\"font-black text-gray-900\">Rarity</h4><p class=\"text-sm text-gray-500 leading-relaxed\">Logarithmic scale based on regional frequency. Rarer birds provide a higher base value.</p></div>
+                        <div class="space-y-6">
+                            <div class="flex gap-4">
+                                <div class="text-3xl bg-blue-50 w-14 h-14 rounded-2xl flex items-center justify-center">📉</div>
+                                <div><h4 class="font-black text-gray-900">Rarity</h4><p class="text-sm text-gray-500 leading-relaxed">Logarithmic scale based on regional frequency. Rarer birds provide a higher base value.</p></div>
                             </div>
-                            <div class=\"flex gap-4\">
-                                <div class=\"text-3xl bg-orange-50 w-14 h-14 rounded-2xl flex items-center justify-center\">❄️</div>
-                                <div><h4 class=\"font-black text-gray-900\">Seasonal Scarcity</h4><p class=\"text-sm text-gray-500 leading-relaxed\">Earn a <span class=\"font-bold text-orange-600\">1.5x bonus</span> for findings during a bird's off-peak season.</p></div>
+                            <div class="flex gap-4">
+                                <div class="text-3xl bg-orange-50 w-14 h-14 rounded-2xl flex items-center justify-center">❄️</div>
+                                <div><h4 class="font-black text-gray-900">Seasonal Scarcity</h4><p class="text-sm text-gray-500 leading-relaxed">Earn a <span class="font-bold text-orange-600">1.5x bonus</span> for findings during a bird's off-peak season.</p></div>
                             </div>
-                            <div class=\"flex gap-4\">
-                                <div class=\"text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center\">🎁</div>
-                                <div><h4 class=\"font-black text-gray-900\">Novelty Bonuses</h4>
-                                    <ul class=\"text-[11px] text-gray-500 space-y-1 mt-1 font-bold\">
-                                        <li>✨ <span class=\"text-green-600 uppercase\">Life Bird:</span> 4x bonus</li>
-                                        <li>🐦 <span class=\"text-blue-500 uppercase\">2nd Sighting:</span> 2x bonus</li>
-                                        <li>🔄 <span class=\"text-gray-600 uppercase\">Repeats:</span> 1x</li>
+                            <div class="flex gap-4">
+                                <div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🎁</div>
+                                <div><h4 class="font-black text-gray-900">Novelty Bonuses</h4>
+                                    <ul class="text-[11px] text-gray-500 space-y-1 mt-1 font-bold">
+                                        <li>✨ <span class="text-green-600 uppercase">Life Bird:</span> 4x bonus</li>
+                                        <li>🐦 <span class="text-blue-500 uppercase">2nd Sighting:</span> 2x bonus</li>
+                                        <li>🔄 <span class="text-gray-600 uppercase">Repeats:</span> 1x</li>
                                     </ul>
                                 </div>
                             </div>
-                            <div class=\"flex gap-4\">
-                                <div class=\"text-3xl bg-green-50 w-14 h-14 rounded-2xl flex items-center justify-center\">🔢</div>
-                                <div><h4 class=\"font-black text-gray-900\">Observation Multiplier</h4><p class=\"text-sm text-gray-500 leading-relaxed\">Every bird counts! Independent observations of a species are each counted towards your final score.</p></div>
+                            <div class="flex gap-4">
+                                <div class="text-3xl bg-green-50 w-14 h-14 rounded-2xl flex items-center justify-center">🔢</div>
+                                <div><h4 class="font-black text-gray-900">Observation Multiplier</h4><p class="text-sm text-gray-500 leading-relaxed">Every bird counts! Independent observations of a species are each counted towards your final score.</p></div>
                             </div>
                         </div>
 
-                        <button onclick=\"state.showHowItWorks=false;render()\" class=\"w-full bg-gray-900 text-white mt-10 py-5 rounded-2xl font-black text-lg shadow-xl hover:bg-blue-600 transition-all\">Got it</button>
+                        <button onclick="state.showHowItWorks=false;render()" class="w-full bg-gray-900 text-white mt-10 py-5 rounded-2xl font-black text-lg shadow-xl hover:bg-blue-600 transition-all">Got it</button>
                     </div>
                 </div>
             `;
