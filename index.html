@@ -6,6 +6,7 @@
     <title>Bird Brain</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
     <style>
         body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
         .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
@@ -199,46 +200,55 @@
             text = text.replace(/^\uFEFF/, '').trim();
             
             // Split lines handling all mobile line-ending variations
-            const lines = text.split(/\r?\n|\r/);
-            if (lines.length < 2) return alert("Empty or invalid CSV file.");
+            const parsed = Papa.parse(text, {
+                header: true,
+                skipEmptyLines: true
+            });
 
-            // Trim and clean headers
-            const headers = lines[0].split(',').map(h => h.trim().replace(/["']/g, ""));
-            const sIdx = headers.indexOf('Species'), 
-                dIdx = headers.indexOf('Observation Date'), 
-                cIdx = headers.indexOf('Count');
-
-            if (sIdx === -1 || dIdx === -1 || cIdx === -1) {
-                return alert("Required columns missing. Please use a standard eBird CSV.");
+            if (parsed.errors.length) {
+                console.error(parsed.errors);
+                alert("CSV parse error");
+                return;
             }
-                
+
             const results = [];
             const tempHistory = [...state.userHistory];
-            let total = 0, date = null;
+            let total = 0;
+            let date = null;
 
-            for (let i = 1; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
+            for (const row of parsed.data) {
+                const species = row['Species'];
+                const obsDate = row['Observation Date'];
+                const countRaw = row['Count'];
 
-                // Split and clean columns
-                const cols = line.split(',').map(c => c.trim().replace(/["']/g, ""));
-                
-                const countRaw = cols[cIdx];
+                if (!species || !obsDate) continue;
+
                 let count = 1;
                 if (countRaw && countRaw.toUpperCase() !== 'X') {
-                    const parsed = parseInt(countRaw, 10);
-                    if (!isNaN(parsed)) count = parsed;
+                    const parsedCount = parseInt(countRaw, 10);
+                    if (!isNaN(parsedCount)) count = parsedCount;
                 }
-                
-                if (!date) date = cols[dIdx];
 
-                const res = scoreObservation(cols[sIdx], cols[dIdx], count, tempHistory, state.frequencyData, region);
+                if (!date) date = obsDate;
+
+                const cleanSpecies = species.trim().replace(/\s+/g, ' ');
+                const cleanDate = obsDate.trim();
+
+                const res = scoreObservation(
+                    cleanSpecies,
+                    cleanDate,
+                    count,
+                    tempHistory,
+                    state.frequencyData,
+                    region
+                );
+
                 results.push(res);
                 total += res.score;
 
                 if (!res.error) {
-                    for(let j=0; j<count; j++) {
-                        tempHistory.push({date: cols[dIdx], species_code: cols[sIdx]});
+                    for (let i = 0; i < count; i++) {
+                        tempHistory.push({ date: cleanDate, species_code: cleanSpecies });
                     }
                 }
             }
