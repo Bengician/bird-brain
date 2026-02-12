@@ -42,8 +42,6 @@
             50% { transform: scale(1.2); opacity: 1; }
             100% { transform: scale(1.5); opacity: 0; }
         }
-        .animate-crack { animation: crackOpen 0.3s forwards; }
-
         .egg-gradient { background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8) 0%, rgba(0,0,0,0.05) 100%); }
     </style>
 </head>
@@ -60,14 +58,14 @@
             currentUser: null,
             users: [],
             checklists: [],
-            userHistory: [],
-            // --- ECONOMY & COLLECTION STATE ---
+            userHistory: [], // Full observation history for scoring context
+            // Economy Data
             birdseed: 0,
             eggs: [], 
-            birds: [], // New: Hatched birds
-            // ----------------------------------
+            birds: [], 
+            // App Data
             frequencyData: {},
-            speciesList: [], // Clean list for hatching logic
+            speciesList: [],
             regions: [],
             currentResult: null,
             view: 'home',
@@ -91,17 +89,20 @@
         ];
 
         /************************************************************
-         * USER & CLOUD LOGIC
+         * USER & CLOUD LOGIC (PERSISTENCE FIX)
          ************************************************************/
         async function loadData() {
             state.loading = true;
             render();
             try {
+                // 1. Get Users
                 const { data: profiles } = await db.from('profiles').select('username');
                 if (profiles) state.users = profiles.map(p => p.username);
 
+                // 2. Get Frequency Data
                 await fetchFrequencyData();
 
+                // 3. Auto-login if saved
                 const savedUser = localStorage.getItem('current_user');
                 if (savedUser && state.users.includes(savedUser)) {
                     await selectUser(savedUser);
@@ -121,14 +122,38 @@
             state.currentUser = username;
             localStorage.setItem('current_user', username);
             try {
-                // Modified select to include 'birds' column
-                const { data } = await db.from('checklist_data').select('data, history, birdseed, eggs, birds').eq('username', username).maybeSingle();
-                state.checklists = data?.data || [];
+                // Fetch data from the standard columns 'data' and 'history'
+                const { data } = await db.from('checklist_data').select('data, history').eq('username', username).maybeSingle();
+                
+                // --- MIGRATION LOGIC ---
+                // The DB column 'data' used to be an Array. Now it is an Object containing { checklists, birdseed, eggs, birds }
+                // We check if it is an array (Old Format) or Object (New Format)
+                
+                const rawData = data?.data;
                 state.userHistory = data?.history || [];
-                state.birdseed = data?.birdseed || 0;
-                state.eggs = data?.eggs || [];
-                state.birds = data?.birds || [];
+
+                if (Array.isArray(rawData)) {
+                    // OLD FORMAT: Just checklists
+                    state.checklists = rawData || [];
+                    state.birdseed = 0;
+                    state.eggs = [];
+                    state.birds = [];
+                } else if (rawData && typeof rawData === 'object') {
+                    // NEW FORMAT: Container object
+                    state.checklists = rawData.checklists || [];
+                    state.birdseed = rawData.birdseed || 0;
+                    state.eggs = rawData.eggs || [];
+                    state.birds = rawData.birds || [];
+                } else {
+                    // Empty or New User
+                    state.checklists = [];
+                    state.birdseed = 0;
+                    state.eggs = [];
+                    state.birds = [];
+                }
+
                 state.currentResult = state.checklists.length > 0 ? state.checklists[0] : null;
+
             } catch (error) { console.error("Load error:", error); }
             state.showUserSelect = false;
             state.showManageUsers = false;
@@ -163,24 +188,30 @@
 
         async function saveData() {
             if (!state.currentUser) return;
-            await db.from('checklist_data').upsert({
-                username: state.currentUser,
-                data: state.checklists,
-                history: state.userHistory,
+            
+            // PACKING DATA: Store economy data INSIDE the 'data' JSON column
+            // This prevents errors from trying to write to non-existent columns
+            const packedData = {
+                checklists: state.checklists,
                 birdseed: state.birdseed,
                 eggs: state.eggs,
-                birds: state.birds, // Save hatched birds
+                birds: state.birds
+            };
+
+            await db.from('checklist_data').upsert({
+                username: state.currentUser,
+                data: packedData, // Saving the wrapper object
+                history: state.userHistory,
                 updated_at: new Date().toISOString()
             }, { onConflict: 'username' });
         }
 
         /************************************************************
-         * ECONOMY & HATCHING LOGIC
+         * ECONOMY & HATCHING
          ************************************************************/
         function buyEgg(eggType) {
             if (state.birdseed >= eggType.cost) {
                 state.birdseed -= eggType.cost;
-                // Add unique ID to egg for tracking
                 state.eggs.push({
                     ...eggType,
                     uuid: Date.now() + Math.random().toString(),
@@ -193,7 +224,6 @@
             }
         }
 
-        // HATCHING MECHANIC
         function handleDragStart(e, eggUuid) {
             e.dataTransfer.setData("text/plain", eggUuid);
             e.dataTransfer.effectAllowed = "move";
@@ -207,38 +237,26 @@
         async function handleDrop(e) {
             e.preventDefault();
             if (state.isHatching) return;
-
             const eggUuid = e.dataTransfer.getData("text/plain");
             const eggIndex = state.eggs.findIndex(egg => egg.uuid === eggUuid);
             
             if (eggIndex > -1) {
                 const egg = state.eggs[eggIndex];
-                
-                // Remove egg from inventory
                 state.eggs.splice(eggIndex, 1);
-                
-                // Start Animation
                 state.hatchingEgg = egg;
                 state.isHatching = true;
                 render();
-
-                // Wait for shake animation (2s)
-                setTimeout(() => {
-                    finalizeHatch(egg);
-                }, 2000);
+                setTimeout(() => { finalizeHatch(egg); }, 2000);
             }
         }
 
         function finalizeHatch(egg) {
-            // Pick a bird
             const hatchedBird = pickBird(egg.luck);
-            
             state.birds.unshift({
                 ...hatchedBird,
                 hatchedAt: new Date().toLocaleDateString(),
                 eggType: egg.name
             });
-            
             state.hatchingEgg = null;
             state.isHatching = false;
             state.hatchResult = hatchedBird;
@@ -247,45 +265,21 @@
         }
 
         function pickBird(luckMultiplier) {
-            // Create a weighted pool based on inverse frequency
-            // Filter out junk data if necessary
             if (state.speciesList.length === 0) return { species: 'Pigeon', rarity: 'Common', color: 'gray' };
-
-            // Simple weighted random algorithm
-            // 1. Calculate total weight (Inverse frequency: Lower freq = Higher Weight? No, we want rarer birds to be HARDER to get)
-            // Wait, standard gaming logic: 
-            // We want a random number. If random number is high, we get rare.
-            // Let's keep it simple: Pick a random species from the list, but filter the list based on "Luck".
-            
-            // Actually, let's just pick a random species from the entire pool, 
-            // but run the check X times (luck) and keep the rarest one found.
-            
             let candidates = [];
-            const attempts = Math.ceil(luckMultiplier * 2); // Common = 2 attempts, Golden = 6 attempts
-
+            const attempts = Math.ceil(luckMultiplier * 2); 
             for(let i=0; i<attempts; i++) {
                 const randIndex = Math.floor(Math.random() * state.speciesList.length);
                 candidates.push(state.speciesList[randIndex]);
             }
-
-            // Sort candidates by rarity (lowest frequency is best)
             candidates.sort((a, b) => a.frequency - b.frequency);
-            
-            // Winner is the rarest (first in sorted list)
             const winner = candidates[0];
-
             let rar = 'Common', col = 'gray';
             if (winner.frequency < 0.02) { rar = 'MEGA RARE'; col = 'purple'; }
             else if (winner.frequency < 0.1) { rar = 'RARE'; col = 'red'; }
             else if (winner.frequency < 0.2) { rar = 'SCARCE'; col = 'orange'; }
             else if (winner.frequency < 0.3) { rar = 'UNCOMMON'; col = 'yellow'; }
-
-            return {
-                species: winner.species,
-                frequency: winner.frequency,
-                rarity: rar,
-                rarity_color: col
-            };
+            return { species: winner.species, frequency: winner.frequency, rarity: rar, rarity_color: col };
         }
 
         /************************************************************
@@ -297,10 +291,7 @@
                 const response = await fetch(url);
                 const data = await response.json();
                 const regionsSet = new Set();
-                
-                // Build unique species list for hatching
                 const uniqueSpecies = {};
-
                 Object.keys(data).forEach(key => {
                     const parts = key.split('_');
                     if (parts.length >= 3) {
@@ -308,19 +299,12 @@
                         regionsSet.add(region);
                         const species = parts[0];
                         const freq = data[key].frequency;
-                        
-                        // Keep the lowest frequency seen for this species (maximum rarity potential)
                         if (!uniqueSpecies[species] || freq < uniqueSpecies[species]) {
                             uniqueSpecies[species] = freq;
                         }
                     }
                 });
-
-                state.speciesList = Object.keys(uniqueSpecies).map(s => ({
-                    species: s,
-                    frequency: uniqueSpecies[s]
-                }));
-
+                state.speciesList = Object.keys(uniqueSpecies).map(s => ({ species: s, frequency: uniqueSpecies[s] }));
                 state.frequencyData = data;
                 state.regions = Array.from(regionsSet).sort();
                 localStorage.setItem('frequency_data', JSON.stringify(data));
@@ -342,7 +326,6 @@
             
             const base = 10 * Math.log10(1 / Math.max(info.frequency, 0.001));
             const season = info.frequency < 0.25 * info.peak_frequency ? 1.5 : 1.0;
-            
             const prevCount = history.filter(h => h.species_code === species).length;
             let novelty = 1.0; 
             if (prevCount === 0) novelty = 4.0;
@@ -357,17 +340,10 @@
             else if (info.frequency < 0.3) { rar = 'UNCOMMON'; col = 'yellow'; }
             
             return {
-                species_code: species, 
-                score: final, 
-                base_score: Math.round(base * 10),
-                seasonal_bonus: season, 
-                novelty_multiplier: novelty, 
-                count_multiplier: count,
-                rarity: rar, 
-                rarity_color: col, 
-                frequency: info.frequency, 
-                is_first: prevCount === 0, 
-                is_second: prevCount === 1
+                species_code: species, score: final, base_score: Math.round(base * 10),
+                seasonal_bonus: season, novelty_multiplier: novelty, count_multiplier: count,
+                rarity: rar, rarity_color: col, frequency: info.frequency, 
+                is_first: prevCount === 0, is_second: prevCount === 1
             };
         }
 
@@ -383,10 +359,11 @@
             text = text.replace(/^\uFEFF/, '').trim();
             const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
 
-            if (parsed.errors.length) {
-                alert("CSV parse error");
-                return;
-            }
+            if (parsed.errors.length) { alert("CSV parse error"); return; }
+
+            // 1. Calculate Score BEFORE Update (Cumulative Logic)
+            const currentTotalScore = state.checklists.reduce((sum, c) => sum + c.total_score, 0);
+            const previousSeeds = Math.floor(currentTotalScore / 10000);
 
             const results = [];
             const tempHistory = [...state.userHistory];
@@ -418,20 +395,18 @@
                 }
             }
                 
-            // Economy: Birdseed Award
-            const seedEarned = Math.floor(total / 10000);
-            if (seedEarned > 0) {
-                state.birdseed += seedEarned;
-            }
+            // 2. Calculate Score AFTER Update
+            const newTotalScore = currentTotalScore + total;
+            const newSeedsTotal = Math.floor(newTotalScore / 10000);
+            
+            // 3. Difference is what we award now
+            const seedsEarnedNow = Math.max(0, newSeedsTotal - previousSeeds);
+            state.birdseed += seedsEarnedNow;
 
             state.checklists = [{ 
-                id: Date.now(), 
-                date, 
-                region, 
-                total_score: total, 
-                species_count: results.length, 
-                observations: results,
-                seed_earned: seedEarned 
+                id: Date.now(), date, region, 
+                total_score: total, species_count: results.length, observations: results,
+                seed_earned: seedsEarnedNow // stored for display on card only
             }, ...state.checklists];
             
             state.userHistory = tempHistory;
@@ -446,10 +421,12 @@
          ************************************************************/
         function render() {
             const app = document.getElementById('app');
+            // Recalculate global stats
+            const totalScore = state.checklists.reduce((s, c) => s + c.total_score, 0);
             const stats = {
                 obs: state.userHistory.length,
                 spec: new Set(state.userHistory.map(h => h.species_code)).size,
-                score: state.checklists.reduce((s, c) => s + c.total_score, 0)
+                score: totalScore
             };
 
             let mainContent = '';
@@ -534,7 +511,7 @@
                         <div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Banked Seed</div>
                         <div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div>
                     </div>
-                    <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Earn 1 seed for every 10k points!</div>
+                    <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Earn 1 seed for every 10k cumulative points!</div>
                 </div>
 
                 <label class="block mb-4 cursor-pointer group">
@@ -760,7 +737,7 @@
                                 <div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🟡</div>
                                 <div>
                                     <h4 class="font-black text-gray-900">Birdseed</h4>
-                                    <p class="text-[11px] text-gray-500 font-bold leading-relaxed">Earn <span class="text-yellow-600">1 Birdseed for every 10,000 points</span>. Use seed to buy eggs!</p>
+                                    <p class="text-[11px] text-gray-500 font-bold leading-relaxed">Earn <span class="text-yellow-600">1 Birdseed for every 10,000 points</span> (Cumulative!). Use seed to buy eggs!</p>
                                 </div>
                             </div>
 
