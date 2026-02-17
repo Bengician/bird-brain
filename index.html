@@ -49,7 +49,7 @@
         const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvYmxwbnBraGJ4cWZ1cmNoaXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3NjgzNzksImV4cCI6MjA4MzM0NDM3OX0.poDCCTvbE-3wxTGanT_quIUw9F-hXoz2YAwVxoK7Kvw';
         const db = supabase.createClient(SB_URL, SB_KEY);
 
-        // --- RARITY DEFINITIONS (Synced across Checklist and Hatching) ---
+        // --- RARITY DEFINITIONS ---
         const RARITY_TIERS = [
             { id: 'MEGA RARE', min: 0, max: 0.02, chance: 0.02, color: 'purple' },
             { id: 'RARE', min: 0.02, max: 0.1, chance: 0.05, color: 'red' },
@@ -81,7 +81,14 @@
             hatchingEgg: null,
             isHatching: false,
             hatchResult: null,
-            loading: true
+            loading: true,
+            // Import State
+            showImportModal: false,
+            ebirdToken: localStorage.getItem('ebird_token') || '',
+            importRegion: 'US-CA-083', // Default to Santa Barbara
+            importDate: new Date().toISOString().split('T')[0],
+            foundChecklists: [],
+            isFetchingChecklists: false
         };
 
         const EGG_TYPES = [
@@ -155,13 +162,12 @@
         }
 
         async function deleteUser(username) {
-            if (!confirm(`Delete ${username}? Data cannot be recovered.`)) return;
+            if (!confirm(`Delete ${username}?`)) return;
             await db.from('checklist_data').delete().eq('username', username);
             await db.from('profiles').delete().eq('username', username);
             state.users = state.users.filter(u => u !== username);
             if (state.currentUser === username) {
                 state.currentUser = null;
-                localStorage.removeItem('current_user');
                 state.showUserSelect = true;
             }
             render();
@@ -242,9 +248,20 @@
             }
 
             let birdsInTier = speciesPool.filter(b => b.peak_frequency >= bestTier.min && b.peak_frequency < bestTier.max);
+            
+            // Fallback logic for empty tiers
             if (birdsInTier.length === 0) {
-                bestTier = RARITY_TIERS[4]; // Fallback to common
-                birdsInTier = speciesPool.filter(b => b.peak_frequency >= bestTier.min);
+                 const currentIdx = RARITY_TIERS.indexOf(bestTier);
+                 const fallbackTier = RARITY_TIERS[Math.min(currentIdx + 1, RARITY_TIERS.length - 1)];
+                 const fallbackPool = speciesPool.filter(b => b.peak_frequency >= fallbackTier.min && b.peak_frequency < fallbackTier.max);
+                 
+                 if (fallbackPool.length === 0) {
+                     const randomFallback = speciesPool[Math.floor(Math.random() * speciesPool.length)];
+                     const randomTier = RARITY_TIERS.find(t => randomFallback.peak_frequency >= t.min && randomFallback.peak_frequency < t.max) || RARITY_TIERS[4];
+                     return { species: randomFallback.species, rarity: randomTier.id, rarity_color: randomTier.color, region: targetRegion };
+                 }
+                 bestTier = fallbackTier;
+                 birdsInTier.push(...fallbackPool);
             }
 
             const totalWeight = birdsInTier.reduce((sum, b) => sum + b.peak_frequency, 0);
@@ -259,7 +276,7 @@
         }
 
         /************************************************************
-         * DATA PROCESSING
+         * DATA PROCESSING (SCORING)
          ************************************************************/
         async function fetchFrequencyData() {
             try {
@@ -312,33 +329,25 @@
             };
         }
 
-        let pendingFile = null;
-        async function handleUpload(e) {
-            pendingFile = e.target.files[0];
-            if (pendingFile) { state.showRegionPrompt = true; render(); }
-            e.target.value = '';
-        }
-
-        async function processChecklist(region) {
-            let text = await pendingFile.text();
-            text = text.replace(/^\uFEFF/, '').trim();
-            const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        // --- SHARED SCORING ENGINE ---
+        // This function now accepts raw data array: [{ species: 'Name', count: 1, date: 'YYYY-MM-DD' }, ...]
+        async function executeScoring(rawData, region) {
             const currentTotalScore = state.checklists.reduce((sum, c) => sum + c.total_score, 0);
             const previousSeeds = Math.floor(currentTotalScore / 10000);
 
             const results = [];
             const tempHistory = [...state.userHistory];
-            let total = 0, date = null;
+            let total = 0;
+            let date = rawData[0]?.date || new Date().toISOString().split('T')[0];
 
-            for (const row of parsed.data) {
-                const species = row['Species'], obsDate = row['Observation Date'], countRaw = row['Count'];
-                if (!species || !obsDate) continue;
-                let count = (countRaw && countRaw.toUpperCase() !== 'X') ? parseInt(countRaw, 10) : 1;
-                if (!date) date = obsDate;
-                const res = scoreObservation(species.trim().replace(/\s+/g, ' '), obsDate.trim(), isNaN(count)?1:count, tempHistory, state.frequencyData, region);
+            for (const item of rawData) {
+                const cleanSpecies = item.species.trim().replace(/\s+/g, ' ');
+                const res = scoreObservation(cleanSpecies, item.date, item.count, tempHistory, state.frequencyData, region);
                 results.push(res);
                 total += res.score;
-                if (!res.error) { for (let i = 0; i < count; i++) tempHistory.push({ date: obsDate, species_code: species.trim() }); }
+                if (!res.error) { 
+                    for (let i = 0; i < item.count; i++) tempHistory.push({ date: item.date, species_code: cleanSpecies }); 
+                }
             }
                 
             const seedsEarnedNow = Math.max(0, Math.floor((currentTotalScore + total) / 10000) - previousSeeds);
@@ -347,9 +356,141 @@
             state.lastRegion = region;
             state.userHistory = tempHistory;
             state.currentResult = state.checklists[0];
-            state.showRegionPrompt = false;
+            
             await saveData();
+            state.showRegionPrompt = false;
+            state.showImportModal = false;
             render();
+        }
+
+        // --- CSV HANDLING ---
+        let pendingFile = null;
+        async function handleUpload(e) {
+            pendingFile = e.target.files[0];
+            if (pendingFile) { state.showRegionPrompt = true; render(); }
+            e.target.value = '';
+        }
+
+        async function processCSV(region) {
+            let text = await pendingFile.text();
+            text = text.replace(/^\uFEFF/, '').trim();
+            const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+            
+            const standardizedData = [];
+            for (const row of parsed.data) {
+                const species = row['Species'];
+                const obsDate = row['Observation Date'];
+                const countRaw = row['Count'];
+                if (!species || !obsDate) continue;
+                let count = (countRaw && countRaw.toUpperCase() !== 'X') ? parseInt(countRaw, 10) : 1;
+                
+                standardizedData.push({
+                    species: species,
+                    date: obsDate.trim(),
+                    count: isNaN(count) ? 1 : count
+                });
+            }
+            executeScoring(standardizedData, region);
+        }
+
+        /************************************************************
+         * EBIRD API & SCRAPER
+         ************************************************************/
+        async function findChecklists() {
+            if (!state.ebirdToken) return alert("Please enter an eBird API Token.");
+            localStorage.setItem('ebird_token', state.ebirdToken);
+            state.isFetchingChecklists = true;
+            render();
+
+            try {
+                // 1. Define the eBird API URL
+                const ebirdUrl = `https://api.ebird.org/v2/product/checklist/feed/${state.importRegion}/${state.importDate.replace(/-/g, '/')}?maxResults=200`;
+                
+                // 2. Wrap it in the CORS Proxy URL
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(ebirdUrl)}`;
+
+                // 3. Fetch from the Proxy instead of directly from eBird
+                const res = await fetch(proxyUrl, { 
+                    headers: { 'X-eBirdApiToken': state.ebirdToken } 
+                });
+
+                if (!res.ok) throw new Error("API Error");
+                const list = await res.json();
+                
+                // 4. Filter by the current Bird Brain username
+                state.foundChecklists = list.filter(c => c.userDisplayName === state.currentUser);
+                
+                if (state.foundChecklists.length === 0) {
+                    alert(`No checklists found for "${state.currentUser}" in ${state.importRegion} on ${state.importDate}. Make sure your eBird "Display Name" matches your Bird Brain profile name exactly.`);
+                }
+            } catch (err) {
+                console.error("Fetch Error:", err);
+                alert("Failed to fetch. This is usually due to an invalid Region Code or API Key.");
+            } finally {
+                state.isFetchingChecklists = false;
+                render();
+            }
+        }
+
+        async function scrapeAndScore(checklist) {
+            state.loading = true;
+            render();
+            try {
+                // Use a proxy to bypass CORS restrictions
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`https://ebird.org/checklist/${checklist.subId}`)}`;
+                const response = await fetch(proxyUrl);
+                const htmlText = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
+
+                const obsData = [];
+                // eBird Web Page Parsing (Subject to structure changes)
+                // Select all observation list items
+                const listItems = doc.querySelectorAll('li[data-species-code]');
+                
+                listItems.forEach(li => {
+                    const speciesEl = li.querySelector('.Heading-main');
+                    const countEl = li.querySelector('.Observation-number span span:last-child') || li.querySelector('.Observation-number');
+                    
+                    if (speciesEl) {
+                        let name = speciesEl.innerText.trim();
+                        // Remove "sp." or brackets if necessary, but Frequency map usually handles full names
+                        let count = 1;
+                        if (countEl) {
+                            const txt = countEl.innerText.trim();
+                            count = txt.toUpperCase() === 'X' ? 1 : parseInt(txt.replace(/,/g, '')) || 1;
+                        }
+                        // Clean name (remove age/sex details often in parens if simplest approach fails, but let's try raw first)
+                        name = name.split('(')[0].trim();
+                        
+                        obsData.push({
+                            species: name,
+                            count: count,
+                            date: state.importDate
+                        });
+                    }
+                });
+
+                if (obsData.length === 0) throw new Error("Could not parse species.");
+                
+                // Map region name from API to something general or just use prompt? 
+                // For simplicity, we use the Import Region logic or prompt logic. 
+                // But we know the region code. Let's try to map region code to our known regions if possible,
+                // or just ask the user to confirm the scoring region (safest).
+                // Actually, let's use the UI Prompt to Map it to a supported region for scoring accuracy.
+                
+                state.tempScrapedData = obsData;
+                state.showImportModal = false;
+                state.showRegionPrompt = true; // Use existing prompt to select "Santa Barbara" etc.
+                state.loading = false;
+                render();
+
+            } catch (err) {
+                console.error(err);
+                alert("Error scraping checklist. Ensure it is visible to public.");
+                state.loading = false;
+                render();
+            }
         }
 
         /************************************************************
@@ -383,6 +524,7 @@
                     </div>
                     <div class="max-w-2xl mx-auto p-4">${mainContent}</div>
                     ${state.showRegionPrompt ? renderRegionPrompt() : ''}
+                    ${state.showImportModal ? renderImportModal() : ''}
                     ${state.showHowItWorks ? renderHowItWorks() : ''}
                     ${state.hatchResult ? renderHatchModal() : ''}
                     ${!state.showUserSelect ? `
@@ -416,15 +558,71 @@
                     <div><div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Banked Seed</div><div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div></div>
                     <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Earn 1 seed for every 10k cumulative points!</div>
                 </div>
-                <label class="block mb-4 cursor-pointer group">
-                    <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all">
-                        <div class="text-5xl mb-3">📤</div><div class="text-2xl">Upload eBird CSV</div>
-                    </div>
-                    <input type="file" onchange="handleUpload(event)" class="hidden" />
-                </label>
+                
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <label class="cursor-pointer group">
+                        <div class="bg-white border-2 border-dashed border-gray-300 p-6 rounded-3xl text-center hover:border-blue-500 hover:bg-blue-50 transition-all">
+                            <div class="text-3xl mb-2">📁</div>
+                            <div class="font-bold text-sm text-gray-600">Upload CSV</div>
+                        </div>
+                        <input type="file" onchange="handleUpload(event)" class="hidden" />
+                    </label>
+                    <button onclick="state.showImportModal=true; render()" class="bg-white border-2 border-dashed border-gray-300 p-6 rounded-3xl text-center hover:border-green-500 hover:bg-green-50 transition-all group">
+                        <div class="text-3xl mb-2">☁️</div>
+                        <div class="font-bold text-sm text-gray-600">eBird Import</div>
+                    </button>
+                </div>
+
                 <button onclick="state.showHowItWorks=true;render()" class="w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors">How is Score Calculated?</button>
                 ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class="text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl">No data uploaded yet.</div>`}
             `;
+        }
+
+        function renderImportModal() {
+            return `
+            <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+                <div class="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[85vh]">
+                    <div class="flex justify-between items-center mb-6"><h2 class="font-black text-2xl text-gray-900">Import Checklist</h2><button onclick="state.showImportModal=false;render()" class="text-gray-400 text-2xl">×</button></div>
+                    
+                    <div class="space-y-4 mb-6">
+                        <div>
+                            <label class="block text-[10px] font-bold uppercase text-gray-400 mb-1">eBird API Key</label>
+                            <input type="password" value="${state.ebirdToken}" onchange="state.ebirdToken=this.value" placeholder="Enter API Token" class="w-full border-2 p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-green-500">
+                            <a href="https://ebird.org/api/keygen" target="_blank" class="text-[10px] text-blue-500 font-bold underline">Get Free Key</a>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-[10px] font-bold uppercase text-gray-400 mb-1">Region Code</label>
+                                <input type="text" value="${state.importRegion}" onchange="state.importRegion=this.value" class="w-full border-2 p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-green-50">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold uppercase text-gray-400 mb-1">Date</label>
+                                <input type="date" value="${state.importDate}" onchange="state.importDate=this.value" class="w-full border-2 p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-green-50">
+                            </div>
+                        </div>
+                        <button onclick="findChecklists()" class="w-full bg-green-600 text-white py-3 rounded-xl font-black shadow-lg shadow-green-200">
+                            ${state.isFetchingChecklists ? 'Searching...' : 'Find My Checklists'}
+                        </button>
+                    </div>
+
+                    ${state.foundChecklists.length > 0 ? `
+                        <div class="border-t pt-4">
+                            <h3 class="text-xs font-bold text-gray-400 uppercase mb-3">Results for ${state.currentUser}</h3>
+                            <div class="space-y-2">
+                                ${state.foundChecklists.map(c => `
+                                    <button onclick="scrapeAndScore({subId: '${c.subId}'})" class="w-full text-left p-4 bg-gray-50 hover:bg-green-50 border rounded-xl transition-all group">
+                                        <div class="flex justify-between items-center mb-1">
+                                            <span class="font-black text-gray-800">${c.obsTime}</span>
+                                            <span class="text-[10px] bg-white border px-2 py-1 rounded-md font-bold text-gray-500 group-hover:border-green-200 group-hover:text-green-600">${c.subId}</span>
+                                        </div>
+                                        <div class="text-xs font-bold text-gray-500 truncate">${c.locName}</div>
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : '<div class="text-center text-gray-400 text-xs py-4">No checklists loaded.</div>'}
+                </div>
+            </div>`;
         }
 
         function renderNest() {
@@ -499,7 +697,8 @@
         }
 
         function renderRegionPrompt() {
-            return `<div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl"><h2 class="font-black text-2xl mb-2 text-gray-900">Location</h2><p class="text-gray-400 text-sm mb-6">Frequencies vary by region.</p><div class="space-y-1">${state.regions.map(r => `<button onclick="processChecklist('${r}')" class="w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between"><span>${r}</span><span class="text-blue-500">→</span></button>`).join('')}</div><button onclick="state.showRegionPrompt=false; render();" class="w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest">Back</button></div></div>`;
+            // Updated region prompt to accept Temp Data from Scraper
+            return `<div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl"><h2 class="font-black text-2xl mb-2 text-gray-900">Location</h2><p class="text-gray-400 text-sm mb-6">Frequencies vary by region.</p><div class="space-y-1">${state.regions.map(r => `<button onclick="state.tempScrapedData ? executeScoring(state.tempScrapedData, '${r}') : processCSV('${r}')" class="w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between"><span>${r}</span><span class="text-blue-500">→</span></button>`).join('')}</div><button onclick="state.showRegionPrompt=false; state.tempScrapedData=null; render();" class="w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest">Back</button></div></div>`;
         }
 
         function renderHowItWorks() {
