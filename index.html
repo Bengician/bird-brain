@@ -100,6 +100,41 @@
             animation: botwShimmer 2s linear infinite;
         }
         .confetti-piece { position: absolute; width: 8px; height: 8px; border-radius: 2px; animation: botwConfetti 1.5s ease-in forwards; }
+
+        /* Rarity Reveal */
+        @keyframes cardReveal {
+            0%   { opacity: 0; transform: translateY(18px) scale(0.92); }
+            65%  { transform: translateY(-3px) scale(1.02); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes scoreSlam {
+            0%   { transform: scale(2.2); opacity: 0; color: #fbbf24; }
+            60%  { transform: scale(0.92); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes rarityBadgePop {
+            0%   { transform: scale(0) rotate(-15deg); opacity: 0; }
+            70%  { transform: scale(1.25) rotate(3deg); }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        @keyframes megaGlow {
+            0%, 100% { box-shadow: 0 0 12px 2px rgba(168,85,247,0.55); }
+            50%       { box-shadow: 0 0 28px 6px rgba(168,85,247,0.85); }
+        }
+        @keyframes rareGlow {
+            0%, 100% { box-shadow: 0 0 10px 2px rgba(239,68,68,0.45); }
+            50%       { box-shadow: 0 0 22px 5px rgba(239,68,68,0.75); }
+        }
+        @keyframes totalScoreCount {
+            0%   { transform: scale(1.5); opacity: 0.4; }
+            100% { transform: scale(1);   opacity: 1; }
+        }
+        .card-reveal      { animation: cardReveal 0.38s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .score-slam       { animation: scoreSlam 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .rarity-badge-pop { animation: rarityBadgePop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .mega-glow        { animation: megaGlow 1.4s ease-in-out infinite; }
+        .rare-glow        { animation: rareGlow 1.4s ease-in-out infinite; }
+        .total-score-anim { animation: totalScoreCount 0.4s ease-out both; }
     </style>
 </head>
 <body>
@@ -288,7 +323,9 @@
             eBirdChecklists: [],
             checklistPickerLoading: false,
             checklistPickerError: null,
-            fetchingChecklist: null   // subId of checklist currently being fetched
+            fetchingChecklist: null,   // subId of checklist currently being fetched
+            // Reveal animation
+            reveal: null   // { checklistId, visibleObs[], done, animatedScore }
         };
 
         const EGG_TYPES = [
@@ -822,8 +859,176 @@
             state.currentResult = state.checklists[0];
             state.pendingeBirdObservations = null;
             await saveData();
-            render();
             initBirdOfWeek();
+            // Kick off the rarity reveal sequence
+            state.view = 'home';
+            setTimeout(() => startReveal(state.checklists[0]), 80);
+        }
+
+        /************************************************************
+         * SOUND EFFECTS
+         ************************************************************/
+        // Shared AudioContext — reuse across calls to avoid hitting browser limits
+        let _audioCtx = null;
+        function getAudioCtx() {
+            if (!_audioCtx || _audioCtx.state === 'closed') {
+                _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (_audioCtx.state === 'suspended') _audioCtx.resume();
+            return _audioCtx;
+        }
+
+        function playNote(ctx, freq, start, dur, type = 'sine', gain = 0.2) {
+            const osc = ctx.createOscillator();
+            const g   = ctx.createGain();
+            osc.connect(g); g.connect(ctx.destination);
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+            g.gain.setValueAtTime(0, ctx.currentTime + start);
+            g.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.015);
+            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+            osc.start(ctx.currentTime + start);
+            osc.stop(ctx.currentTime + start + dur + 0.01);
+        }
+
+        function playRaritySound(rarity) {
+            try {
+                const ctx = getAudioCtx();
+                if (rarity === 'MEGA RARE') {
+                    // Full ascending fanfare — matches existing BotW sound energy
+                    playNote(ctx, 392,  0.00, 0.14, 'triangle', 0.28);
+                    playNote(ctx, 523,  0.12, 0.14, 'triangle', 0.30);
+                    playNote(ctx, 659,  0.24, 0.14, 'triangle', 0.30);
+                    playNote(ctx, 784,  0.36, 0.14, 'triangle', 0.32);
+                    playNote(ctx, 1047, 0.48, 0.45, 'triangle', 0.38);
+                    playNote(ctx, 659,  0.48, 0.45, 'sine',     0.16);
+                    playNote(ctx, 1319, 0.70, 0.18, 'sine',     0.16);
+                    playNote(ctx, 1047, 0.82, 0.50, 'triangle', 0.28);
+                } else if (rarity === 'RARE') {
+                    // Bright double-chime
+                    playNote(ctx, 784,  0.00, 0.16, 'triangle', 0.24);
+                    playNote(ctx, 1047, 0.14, 0.16, 'triangle', 0.26);
+                    playNote(ctx, 1319, 0.28, 0.32, 'sine',     0.16);
+                    playNote(ctx, 1047, 0.34, 0.38, 'triangle', 0.18);
+                } else if (rarity === 'SCARCE') {
+                    // Pleasant ascending pair
+                    playNote(ctx, 659,  0.00, 0.16, 'triangle', 0.20);
+                    playNote(ctx, 880,  0.14, 0.28, 'triangle', 0.18);
+                    playNote(ctx, 1047, 0.26, 0.22, 'sine',     0.10);
+                } else if (rarity === 'UNCOMMON') {
+                    // Soft single chime
+                    playNote(ctx, 523,  0.00, 0.14, 'triangle', 0.15);
+                    playNote(ctx, 659,  0.12, 0.22, 'sine',     0.11);
+                } else {
+                    // Subtle tick for common
+                    playNote(ctx, 440,  0.00, 0.07, 'sine',     0.07);
+                }
+            } catch(e) {}
+        }
+
+        function playScoreTick() {
+            try {
+                const ctx = getAudioCtx();
+                playNote(ctx, 1047, 0, 0.04, 'sine', 0.03);
+            } catch(e) {}
+        }
+
+        function playRevealCompleteSound() {
+            try {
+                const ctx = getAudioCtx();
+                // Short triumphant sting
+                playNote(ctx, 523,  0.00, 0.12, 'triangle', 0.22);
+                playNote(ctx, 659,  0.10, 0.12, 'triangle', 0.22);
+                playNote(ctx, 784,  0.20, 0.12, 'triangle', 0.22);
+                playNote(ctx, 1047, 0.30, 0.40, 'triangle', 0.28);
+                playNote(ctx, 784,  0.30, 0.40, 'sine',     0.14);
+            } catch(e) {}
+        }
+
+        /************************************************************
+         * RARITY REVEAL SEQUENCE
+         ************************************************************/
+        const RARITY_ORDER = ['MEGA RARE', 'RARE', 'SCARCE', 'UNCOMMON', 'COMMON', undefined, null];
+
+        function rarityRank(r) {
+            const i = RARITY_ORDER.indexOf(r);
+            return i === -1 ? 99 : i;
+        }
+
+        function startReveal(checklist) {
+            // Sort: commons first, rarest last — drama builds to a climax
+            const sorted = [...checklist.observations].sort(
+                (a, b) => rarityRank(a.rarity) - rarityRank(b.rarity)
+            ).reverse(); // reverse so common = index 0, mega rare = last
+
+            state.reveal = {
+                checklistId: checklist.id,
+                visibleObs: [],
+                done: false,
+                animatedScore: 0
+            };
+            render();
+
+            let delay = 0;
+            sorted.forEach((obs, i) => {
+                const isLast   = i === sorted.length - 1;
+                // Pacing: common=160ms gap, uncommon=220, scarce=350, rare=500, mega=700
+                const gapMs = ({ 'MEGA RARE': 700, 'RARE': 500, 'SCARCE': 350, 'UNCOMMON': 220 })[obs.rarity] || 160;
+
+                setTimeout(() => {
+                    state.reveal.visibleObs = sorted.slice(0, i + 1);
+                    // Partial render — just re-draw the home view content
+                    const app = document.getElementById('app');
+                    if (app) {
+                        const totalScore = state.checklists.reduce((s, c) => s + c.total_score, 0);
+                        const stats = { obs: state.userHistory.length, spec: new Set(state.userHistory.map(h => h.species_code)).size, score: totalScore };
+                        // Only re-render the main content area to avoid killing modals
+                        const main = app.querySelector('.reveal-host');
+                        if (main) main.innerHTML = renderHome(stats);
+                    }
+                    playRaritySound(obs.rarity);
+
+                    if (isLast) {
+                        setTimeout(() => animateTotalScore(checklist.total_score), 250);
+                    }
+                }, delay);
+
+                delay += gapMs;
+            });
+        }
+
+        function animateTotalScore(target) {
+            const duration = 1100;
+            const startTime = performance.now();
+            let lastTickAt = 0;
+
+            function tick(now) {
+                const elapsed  = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased    = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+                const current  = Math.round(eased * target);
+                state.reveal.animatedScore = current;
+
+                // Tick sound every ~60pts gap, throttled
+                if (current - lastTickAt >= 60) {
+                    playScoreTick();
+                    lastTickAt = current;
+                }
+
+                // Update the score element directly — no full re-render
+                const el = document.getElementById('reveal-total-score');
+                if (el) el.textContent = current.toLocaleString();
+
+                if (progress < 1) {
+                    requestAnimationFrame(tick);
+                } else {
+                    state.reveal.animatedScore = target;
+                    state.reveal.done = true;
+                    playRevealCompleteSound();
+                    render(); // final full render to restore normal state
+                }
+            }
+            requestAnimationFrame(tick);
         }
 
         /************************************************************
@@ -839,8 +1044,8 @@
             else if (state.showUserSelect) mainContent = renderUserSelect();
             else if (state.view === 'home') mainContent = renderHome(stats);
             else if (state.view === 'history') mainContent = renderHistory();
-            else if (state.view === 'nest') mainContent = renderNest();
-            else if (state.view === 'collection') mainContent = renderCollection();
+            else if (state.view === 'the nest') mainContent = renderNest();
+            else if (state.view === 'your flock') mainContent = renderCollection();
 
             app.innerHTML = `
                 <div class="min-h-screen bg-gray-50 pb-24">
@@ -855,7 +1060,7 @@
                              ` : ''}
                         </div>
                     </div>
-                    <div class="max-w-2xl mx-auto p-4">${mainContent}</div>
+                    <div class="max-w-2xl mx-auto p-4 reveal-host">${mainContent}</div>
                     ${state.showRegionPrompt ? renderRegionPrompt() : ''}
                     ${state.showHowItWorks ? renderHowItWorks() : ''}
                     ${state.hatchResult ? renderHatchModal() : ''}
@@ -866,8 +1071,8 @@
                         <div class="fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40">
                             <button onclick="state.view='home';render()" class="p-2 flex flex-col items-center ${state.view==='home'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🏆</span><span class="text-[10px] uppercase mt-1">Score</span></button>
                             <button onclick="state.view='history';render()" class="p-2 flex flex-col items-center ${state.view==='history'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">📋</span><span class="text-[10px] uppercase mt-1">History</span></button>
-                            <button onclick="state.view='nest';render()" class="p-2 flex flex-col items-center ${state.view==='nest'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🛍️</span><span class="text-[10px] uppercase mt-1">Nest</span></button>
-                            <button onclick="state.view='collection';render()" class="p-2 flex flex-col items-center ${state.view==='collection'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🦅</span><span class="text-[10px] uppercase mt-1">Birds</span></button>
+                            <button onclick="state.view='the nest';render()" class="p-2 flex flex-col items-center ${state.view==='the nest'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🛍️</span><span class="text-[10px] uppercase mt-1">The Nest</span></button>
+                            <button onclick="state.view='your flock';render()" class="p-2 flex flex-col items-center ${state.view==='your flock'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🦅</span><span class="text-[10px] uppercase mt-1">Your Flock</span></button>
                         </div>
                     ` : ''}
                 </div>
@@ -1115,8 +1320,8 @@
                     <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-yellow-500">${stats.score.toLocaleString()}</div><div class="text-[10px] uppercase font-bold text-gray-400">Total Score</div></div>
                 </div>
                 <div class="bg-yellow-50 border-2 border-yellow-200 p-4 rounded-3xl mb-6 flex items-center justify-between">
-                    <div><div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Banked Seed</div><div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div></div>
-                    <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Earn 1 seed for every 10k cumulative points!</div>
+                    <div><div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Your Birdseed</div><div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div></div>
+                    <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Every 10K points earns you 1 birdseed!</div>
                 </div>
                 <button onclick="openChecklistPicker()" class="block w-full mb-4 group">
                     <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all">
@@ -1151,7 +1356,7 @@
 
         function renderCollection() {
             return `
-                <div class="mb-6"><h2 class="font-black text-3xl text-gray-900">Your Collection</h2></div>
+                <div class="mb-6"><h2 class="font-black text-3xl text-gray-900">Your Flock</h2></div>
                 <div class="mb-8 p-6 bg-gray-100 rounded-[40px] border-4 border-dashed border-gray-300 text-center relative transition-all ${state.isHatching ? 'animate-shake bg-yellow-50 border-yellow-300' : ''}"
                      ondragover="event.preventDefault()" ondrop="handleDrop(event)">
                     ${state.isHatching ? `<div class="text-6xl mb-4 animate-bounce">${state.hatchingEgg.emoji}</div><div class="font-black text-yellow-600 uppercase tracking-widest animate-pulse">Hatching...</div>` : `<div class="text-4xl text-gray-300 mb-2">📥</div><div class="text-gray-400 font-bold text-sm uppercase tracking-widest">Drag Egg Here to Hatch</div>`}
@@ -1196,23 +1401,42 @@
         }
 
         function renderChecklistCard(c, isLatest) {
+            const rev = state.reveal && state.reveal.checklistId === c.id && !state.reveal.done;
             const botwBadge = c.botw_unlocked 
                 ? `<div class="absolute -top-3 -left-3 bg-emerald-500 text-white px-3 py-1.5 rounded-2xl font-black text-xs shadow-xl border-2 border-white">🐦 Bird of Week Found!</div>`
                 : (c.botw_applied ? `<div class="absolute -top-3 -left-3 bg-teal-500 text-white px-3 py-1.5 rounded-2xl font-black text-xs shadow-xl border-2 border-white">✨ 2× Week Bonus</div>` : '');
-            return `<div class="bg-white p-6 rounded-3xl shadow-xl border relative">${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-yellow-400 text-yellow-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🟡</div>` : ''}${botwBadge}
-                <div class="flex justify-between items-center mb-1"><h2 class="font-black text-xl text-gray-900">${isLatest ? 'Last Checklist' : ''}</h2><div class="text-3xl font-black text-blue-600">${c.total_score.toLocaleString()}</div></div>
-                <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6">📅 ${c.date} • 📍 ${c.region}</div>
-                <div class="space-y-2">${c.observations.map((o, i) => renderObservationRow(o, i, 'home')).join('')}</div></div>`;
+
+            const obsToShow = rev ? state.reveal.visibleObs : c.observations;
+            const scoreHtml = rev
+                ? `<div id="reveal-total-score" class="text-3xl font-black text-blue-600 total-score-anim tabular-nums">${state.reveal.animatedScore.toLocaleString()}</div>`
+                : `<div class="text-3xl font-black text-blue-600">${c.total_score.toLocaleString()}</div>`;
+
+            return `<div class="bg-white p-6 rounded-3xl shadow-xl border relative">
+                ${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-yellow-400 text-yellow-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🟡</div>` : ''}
+                ${botwBadge}
+                <div class="flex justify-between items-center mb-1">
+                    <h2 class="font-black text-xl text-gray-900">${isLatest ? 'Last Checklist' : ''}</h2>
+                    ${scoreHtml}
+                </div>
+                <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-4">📅 ${c.date} • 📍 ${c.region}</div>
+                ${rev ? `<div class="text-[10px] text-blue-400 font-black uppercase tracking-widest mb-3 animate-pulse">✦ Revealing your checklist...</div>` : ''}
+                <div class="space-y-2">${obsToShow.map((o, i) => renderObservationRow(o, i, 'home', rev)).join('')}</div>
+            </div>`;
         }
 
-        function renderObservationRow(o, i, viewType) {
+        function renderObservationRow(o, i, viewType, isReveal) {
             const uniqueId = `${viewType}_${o.species_code}_${i}`, isExpanded = state.expandedSpeciesId === uniqueId;
-            return `<div class="border-2 border-${o.rarity_color}-100 bg-${o.rarity_color}-50 rounded-2xl overflow-hidden mb-2 transition-all">
+            const revealClass = isReveal ? 'card-reveal' : '';
+            const glowClass = isReveal && o.rarity === 'MEGA RARE' ? 'mega-glow'
+                            : isReveal && o.rarity === 'RARE'      ? 'rare-glow' : '';
+            const scoreClass = isReveal ? 'score-slam' : '';
+            const badgeClass = isReveal ? 'rarity-badge-pop' : '';
+            return `<div class="border-2 border-${o.rarity_color}-100 bg-${o.rarity_color}-50 rounded-2xl overflow-hidden mb-2 transition-all ${revealClass} ${glowClass}">
                 <button onclick="state.expandedSpeciesId = (state.expandedSpeciesId === '${uniqueId}' ? null : '${uniqueId}'); render()" class="w-full p-4 flex justify-between items-center">
-                    <div class="text-left"><div class="font-black text-gray-800 text-lg flex items-center gap-2">${o.species_code} <span class="text-[10px] bg-${o.rarity_color}-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-tighter">${o.rarity}</span></div>
+                    <div class="text-left"><div class="font-black text-gray-800 text-lg flex items-center gap-2">${o.species_code} <span class="text-[10px] bg-${o.rarity_color}-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-tighter ${badgeClass}">${o.rarity}</span></div>
                     <div class="flex items-center gap-2 mt-0.5">${o.is_first ? '<span class="text-[10px] font-black text-green-600 uppercase tracking-tighter">Life Bird! (4x Bonus)</span>' : (o.is_second ? '<span class="text-[10px] font-black text-blue-500 uppercase tracking-tighter">2nd Sighting (2x Bonus)</span>' : '')}
                     ${o.count_multiplier > 1 ? `<span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-md font-black border border-green-200 uppercase tracking-tighter">x${o.count_multiplier}</span>` : ''}</div></div>
-                    <div class="font-black text-xl text-blue-800">${o.score.toLocaleString()}</div>
+                    <div class="font-black text-xl text-blue-800 ${scoreClass}">${o.score.toLocaleString()}</div>
                 </button>
                 ${isExpanded ? `<div class="p-4 border-t bg-white text-[11px] space-y-2 text-gray-600 animate-fadeIn">
                     <div class="flex justify-between"><span>Base Score (F: ${(o.frequency*100).toFixed(2)}%)</span><span class="font-bold text-blue-600">${o.base_score}</span></div>
@@ -1238,8 +1462,8 @@
 
         function renderHowItWorks() {
             return `<div class="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-[40px] p-8 max-w-md shadow-2xl relative"><h2 class="font-black text-2xl mb-4 text-gray-900">How Scoring Works</h2><div class="space-y-6">
-                <div class="flex gap-4"><div class="text-3xl bg-blue-50 w-14 h-14 rounded-2xl flex items-center justify-center">📉</div><div><h4 class="font-black text-gray-900">Rarity Score</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">MEGA RARE < 2%, RARE < 10%, SCARCE < 20%, UNCOMMON < 30%.</p></div></div>
-                <div class="flex gap-4"><div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🟡</div><div><h4 class="font-black text-gray-900">Birdseed</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Earn 1 seed for every 10,000 cumulative points (from all checklists!). Use seed to buy eggs in the Nest.</p></div></div>
+                <div class="flex gap-4"><div class="text-3xl bg-blue-50 w-14 h-14 rounded-2xl flex items-center justify-center">📉</div><div><h4 class="font-black text-gray-900">Rarity Score</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">The rarer the bird, the higher the score! There are 5 tiers: COMMON birds earn you a modest base score, UNCOMMON birds start to turn heads, SCARCE birds raise eyebrows, RARE birds have your birding friends questioning your sanity, and MEGA RARE birds are the stuff of legend - seen in fewer than 2% of all checklists.</p></div></div>
+                <div class="flex gap-4"><div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🟡</div><div><h4 class="font-black text-gray-900">Birdseed</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every 10,000 points earns you 1 birdseed (from all checklists!). Use seed to buy eggs in the Nest.</p></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-purple-50 w-14 h-14 rounded-2xl flex items-center justify-center">✨</div><div><h4 class="font-black text-gray-900">Novelty Bonuses</h4><ul class="text-[11px] text-gray-500 space-y-1 mt-1 font-bold"><li>✨ <span class="text-green-600 uppercase tracking-tighter">Life Bird:</span> 4x bonus</li><li>🐦 <span class="text-blue-500 uppercase tracking-tighter">2nd Sighting:</span> 2x bonus</li></ul></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-green-50 w-14 h-14 rounded-2xl flex items-center justify-center">🔢</div><div><h4 class="font-black text-gray-900">Observation Multiplier</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every bird counts! Independent sightings of a species count towards your score.</p></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center">🐦</div><div><h4 class="font-black text-gray-900">Bird of the Week</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Each Monday, a notable bird from your recent region becomes the Bird of the Week. Find it in any checklist that week to double ALL of your scores for the rest of the week!</p></div></div>
