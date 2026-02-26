@@ -6,7 +6,7 @@
     <title>Bird Brain</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
     <style>
         body { margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
         .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
@@ -38,6 +38,68 @@
         .animate-shake { animation: shake 0.5s; animation-iteration-count: infinite; }
         
         .egg-gradient { background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.8) 0%, rgba(0,0,0,0.05) 100%); }
+
+        /* Bird of the Week Found - Celebration Animations */
+        @keyframes botwBgPulse {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+        @keyframes botwBirdFly {
+            0%   { transform: translateY(0px) rotate(-5deg) scale(1); }
+            25%  { transform: translateY(-18px) rotate(5deg) scale(1.1); }
+            50%  { transform: translateY(-8px) rotate(-3deg) scale(1.05); }
+            75%  { transform: translateY(-22px) rotate(6deg) scale(1.12); }
+            100% { transform: translateY(0px) rotate(-5deg) scale(1); }
+        }
+        @keyframes botwSlideUp {
+            from { opacity: 0; transform: translateY(60px) scale(0.85); }
+            to   { opacity: 1; transform: translateY(0px) scale(1); }
+        }
+        @keyframes botwTitlePop {
+            0%   { opacity: 0; transform: scale(0.4) rotate(-8deg); }
+            60%  { transform: scale(1.15) rotate(3deg); }
+            80%  { transform: scale(0.95) rotate(-1deg); }
+            100% { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
+        @keyframes botwConfetti {
+            0%   { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(120px) rotate(720deg); opacity: 0; }
+        }
+        @keyframes botwStarSpin {
+            0%   { transform: rotate(0deg) scale(0); opacity: 0; }
+            50%  { transform: rotate(180deg) scale(1.3); opacity: 1; }
+            100% { transform: rotate(360deg) scale(1); opacity: 1; }
+        }
+        @keyframes botwGlow {
+            0%, 100% { box-shadow: 0 0 20px rgba(52, 211, 153, 0.4), 0 0 60px rgba(52, 211, 153, 0.2); }
+            50%       { box-shadow: 0 0 40px rgba(52, 211, 153, 0.8), 0 0 100px rgba(52, 211, 153, 0.4); }
+        }
+        @keyframes botwScoreCount {
+            from { transform: scale(1.5); color: #fbbf24; }
+            to   { transform: scale(1);   color: #065f46; }
+        }
+        @keyframes botwShimmer {
+            0%   { background-position: -200% center; }
+            100% { background-position: 200% center; }
+        }
+        @keyframes botwRipple {
+            0%   { transform: scale(0); opacity: 0.8; }
+            100% { transform: scale(4); opacity: 0; }
+        }
+        .botw-modal-enter { animation: botwSlideUp 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        .botw-bird-fly    { animation: botwBirdFly 1.8s ease-in-out infinite; }
+        .botw-title-pop   { animation: botwTitlePop 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275) 0.3s both; }
+        .botw-star-spin   { animation: botwStarSpin 0.6s ease-out forwards; }
+        .botw-glow        { animation: botwGlow 2s ease-in-out infinite; }
+        .botw-shimmer-text {
+            background: linear-gradient(90deg, #065f46, #34d399, #fbbf24, #34d399, #065f46);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: botwShimmer 2s linear infinite;
+        }
+        .confetti-piece { position: absolute; width: 8px; height: 8px; border-radius: 2px; animation: botwConfetti 1.5s ease-in forwards; }
     </style>
 </head>
 <body>
@@ -48,6 +110,139 @@
         const SB_URL = 'https://hoblpnpkhbxqfurchiqo.supabase.co';
         const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvYmxwbnBraGJ4cWZ1cmNoaXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3NjgzNzksImV4cCI6MjA4MzM0NDM3OX0.poDCCTvbE-3wxTGanT_quIUw9F-hXoz2YAwVxoK7Kvw';
         const db = supabase.createClient(SB_URL, SB_KEY);
+
+        // --- eBird key (safe to expose - free key, no billing risk) ---
+        const EBIRD_API_KEY = '5s6bstv9m35t'; // Replace with your eBird key
+
+        // --- Gemini is secured via Supabase Edge Function (billing attached) ---
+
+        /************************************************************
+         * BIRD OF THE WEEK LOGIC
+         ************************************************************/
+        // Returns ISO string for the Monday that starts the current week
+        function getCurrentWeekMonday() {
+            const now = new Date();
+            const day = now.getDay(); // 0=Sun, 1=Mon...
+            const diff = (day === 0) ? -6 : 1 - day; // days back to Monday
+            const monday = new Date(now);
+            monday.setHours(0, 0, 0, 0);
+            monday.setDate(now.getDate() + diff);
+            return monday.toISOString().split('T')[0];
+        }
+
+        async function getRegionCodeForRegion(region) {
+            try {
+                const cleanRegion = region.trim();
+                console.log('BotW: looking up region code for:', JSON.stringify(cleanRegion));
+
+                // Try exact match first
+                const { data, error } = await db
+                    .from('d_region_codes')
+                    .select('regionCode, Region')
+                    .eq('Region', cleanRegion)
+                    .maybeSingle();
+
+                if (error) { console.error('Region code lookup error:', error); return null; }
+
+                if (data?.regionCode) {
+                    console.log('BotW: found region code:', data.regionCode);
+                    return data.regionCode;
+                }
+
+                // Fallback: case-insensitive search across all rows
+                console.warn('BotW: exact match failed, trying case-insensitive search...');
+                const { data: allRows, error: allErr } = await db
+                    .from('d_region_codes')
+                    .select('regionCode, Region');
+
+                if (allErr || !allRows) return null;
+
+                console.log('BotW: all regions in table:', allRows.map(r => JSON.stringify(r.Region)));
+
+                const match = allRows.find(r => r.Region.trim().toLowerCase() === cleanRegion.toLowerCase());
+                if (match) {
+                    console.log('BotW: case-insensitive match found:', match.Region, '->', match.regionCode);
+                    return match.regionCode;
+                }
+
+                console.warn('BotW: no match found. Region from checklist:', JSON.stringify(cleanRegion));
+                return null;
+            } catch (e) { console.error('Region code error:', e); return null; }
+        }
+
+        // Returns { species, total } or { species: null, total: 0 } on no results, null on error
+        async function fetchBirdOfWeek(regionCode, excludeList = []) {
+            try {
+                const resp = await fetch(
+                    `https://api.ebird.org/v2/data/obs/${regionCode}/recent/notable?detail=simple`,
+                    { headers: { 'X-eBirdApiToken': EBIRD_API_KEY } }
+                );
+                if (!resp.ok) { console.error('eBird edge function error:', resp.status); return null; }
+                const observations = await resp.json();
+                if (!observations || observations.length === 0) return { species: null, total: 0 };
+
+                const allSpecies = [...new Set(observations.map(o => o.comName))];
+                const total = allSpecies.length;
+
+                // Try to pick one not in the exclusion list
+                const candidates = allSpecies.length > 1
+                    ? allSpecies.filter(s => !excludeList.includes(s))
+                    : allSpecies;
+
+                // If we've exhausted all options, pick from the full list
+                const pool = candidates.length > 0 ? candidates : allSpecies;
+                const species = pool[Math.floor(Math.random() * pool.length)];
+                return { species, total };
+            } catch (e) { console.error('eBird fetch error:', e); return null; }
+        }
+
+        async function initBirdOfWeek() {
+            if (!state.lastRegion) return;
+            if (state.birdOfWeekLoading) return; // already in progress, don't double-call
+            const weekStart = getCurrentWeekMonday();
+
+            // If we already have a confirmed bird for this week, skip re-fetching
+            if (state.birdOfWeek && state.birdOfWeek.weekStart === weekStart && state.birdOfWeek.species) return;
+
+            state.birdOfWeekLoading = true;
+            state.birdOfWeekError = null;
+            render();
+
+            // Step 1: look up the eBird region code
+            const regionCode = await getRegionCodeForRegion(state.lastRegion);
+            if (!regionCode) {
+                console.warn('BotW: no region code for', state.lastRegion);
+                state.birdOfWeekLoading = false;
+                state.birdOfWeekError = `No eBird region code found for "${state.lastRegion}"`;
+                render();
+                return;
+            }
+
+            // Step 2: fetch notable observations via Edge Function
+            const result = await fetchBirdOfWeek(regionCode);
+            if (!result) {
+                state.birdOfWeekError = `Could not reach the eBird service. Please try again later.`;
+            } else if (result.total === 0) {
+                state.birdOfWeekError = `No notable birds have been reported in your region recently. Check back next week!`;
+            } else {
+                const prevFound = (state.birdOfWeek?.weekStart === weekStart) ? (state.birdOfWeek.found || false) : false;
+                state.birdOfWeek = { species: result.species, weekStart, regionCode, region: state.lastRegion, found: prevFound, seenSpecies: [] };
+                state.birdOfWeekError = null;
+                await saveData();
+            }
+
+            state.birdOfWeekLoading = false;
+            render();
+        }
+
+        // Call after a checklist is processed to check if Bird of the Week was found
+        function checkBirdOfWeekFound(observations) {
+            if (!state.birdOfWeek || state.birdOfWeek.found) return false;
+            const weekStart = getCurrentWeekMonday();
+            if (state.birdOfWeek.weekStart !== weekStart) return false;
+            const target = state.birdOfWeek.species.toLowerCase();
+            return observations.some(o => o.species_code.toLowerCase() === target || (o.common_name && o.common_name.toLowerCase() === target));
+        }
 
         // --- RARITY DEFINITIONS (Synced across Checklist and Hatching) ---
         const RARITY_TIERS = [
@@ -81,7 +276,19 @@
             hatchingEgg: null,
             isHatching: false,
             hatchResult: null,
-            loading: true
+            loading: true,
+            birdOfWeek: null,        // { species, weekStart, regionCode, found }
+            birdOfWeekLoading: false,
+            birdOfWeekError: null,
+            showBirdOfWeekFound: false,
+            // eBird checklist picker
+            eBirdUsername: null,
+            showChecklistPicker: false,
+            showUsernamePrompt: false,
+            eBirdChecklists: [],
+            checklistPickerLoading: false,
+            checklistPickerError: null,
+            fetchingChecklist: null   // subId of checklist currently being fetched
         };
 
         const EGG_TYPES = [
@@ -89,6 +296,30 @@
             { id: 'speckled', name: 'Speckled Egg', cost: 5, color: 'bg-blue-100', emoji: '🪺', luck: 2 },
             { id: 'golden', name: 'Golden Egg', cost: 20, color: 'bg-yellow-200', emoji: '✨', luck: 3 }
         ];
+
+        /************************************************************
+         * AI FACT GENERATION (via Supabase Edge Function)
+         ************************************************************/
+        async function getBirdFact(species, rarity) {
+            try {
+                const response = await fetch(
+                    `${SB_URL}/functions/v1/bird-fact`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ species, rarity })
+                    }
+                );
+
+                const data = await response.json();
+                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                return text ? text.trim() : "A mysterious avian marvel.";
+
+            } catch (error) {
+                console.error("Gemini Error:", error);
+                return "Known for its unique role in the local ecosystem.";
+            }
+        }
 
         /************************************************************
          * USER & CLOUD LOGIC
@@ -128,6 +359,15 @@
                     state.birdseed = rawData.birdseed || 0;
                     state.eggs = rawData.eggs || [];
                     state.birds = rawData.birds || [];
+                    // Restore birdOfWeek but only if it's from this week
+                    const savedBotW = rawData.birdOfWeek;
+                    if (savedBotW && savedBotW.weekStart === getCurrentWeekMonday()) {
+                        state.birdOfWeek = savedBotW;
+                    } else {
+                        state.birdOfWeek = null;
+                    }
+                    // Restore eBird username
+                    state.eBirdUsername = rawData.eBirdUsername || null;
                 } else {
                     state.checklists = [];
                     state.birdseed = 0;
@@ -144,6 +384,8 @@
             state.showManageUsers = false;
             state.loading = false;
             render();
+            // Init Bird of the Week once user data (and lastRegion) is loaded
+            initBirdOfWeek();
         }
 
         async function createUser(username) {
@@ -173,7 +415,9 @@
                 checklists: state.checklists,
                 birdseed: state.birdseed,
                 eggs: state.eggs,
-                birds: state.birds
+                birds: state.birds,
+                birdOfWeek: state.birdOfWeek,
+                eBirdUsername: state.eBirdUsername
             };
             await db.from('checklist_data').upsert({
                 username: state.currentUser,
@@ -206,16 +450,26 @@
                 state.hatchingEgg = egg;
                 state.isHatching = true;
                 render();
+                
+                // Finalize hatch after animation
                 setTimeout(() => { finalizeHatch(egg); }, 2000);
             }
         }
 
-        function finalizeHatch(egg) {
+        async function finalizeHatch(egg) {
             const hatchedBird = pickBird(egg.luck);
-            state.birds.unshift({ ...hatchedBird, hatchedAt: new Date().toLocaleDateString() });
+            // Fetch AI fact
+            const funFact = await getBirdFact(hatchedBird.species, hatchedBird.rarity);
+            
+            state.birds.unshift({ 
+                ...hatchedBird, 
+                hatchedAt: new Date().toLocaleDateString(),
+                fact: funFact 
+            });
+            
             state.hatchingEgg = null;
             state.isHatching = false;
-            state.hatchResult = hatchedBird;
+            state.hatchResult = state.birds[0];
             saveData();
             render();
         }
@@ -312,44 +566,264 @@
             };
         }
 
-        let pendingFile = null;
-        async function handleUpload(e) {
-            pendingFile = e.target.files[0];
-            if (pendingFile) { state.showRegionPrompt = true; render(); }
-            e.target.value = '';
+
+
+
+        /************************************************************
+         * eBIRD CHECKLIST PICKER
+         ************************************************************/
+        function handleChecklistSelect(btn) {
+            const subId = btn.dataset.subid;
+            const loc = btn.dataset.loc;
+            const isoDate = btn.dataset.isodate;
+            const region = btn.dataset.region;
+            selecteBirdChecklist(subId, loc, isoDate, region);
         }
 
-        async function processChecklist(region) {
-            let text = await pendingFile.text();
-            text = text.replace(/^\uFEFF/, '').trim();
-            const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        async function openChecklistPicker() {
+            if (!state.eBirdUsername) {
+                state.showUsernamePrompt = true;
+                render();
+                return;
+            }
+            state.showChecklistPicker = true;
+            state.checklistPickerLoading = true;
+            state.checklistPickerError = null;
+            state.eBirdChecklists = [];
+            render();
+            await fetchUserChecklists();
+        }
+
+        async function saveeBirdUsername(username) {
+            username = username.trim();
+            if (!username) return;
+            state.eBirdUsername = username;
+            state.showUsernamePrompt = false;
+            await saveData();
+            // Now open the picker
+            await openChecklistPicker();
+        }
+
+        async function fetchUserChecklists() {
+            try {
+                // eBird API has no public "by username" endpoint — we fetch the regional
+                // feed and filter client-side by the user's display name.
+                const regionCode = state.birdOfWeek?.regionCode || (state.lastRegion ? await getRegionCodeForRegion(state.lastRegion) : null);
+                if (!regionCode) {
+                    state.checklistPickerError = 'Could not determine your region. Please upload a checklist first to set your region.';
+                    state.checklistPickerLoading = false;
+                    render();
+                    return;
+                }
+
+                // Fetch up to 200 recent regional checklists, then filter by username
+                const resp = await fetch(
+                    `https://api.ebird.org/v2/product/lists/${regionCode}?maxResults=200`,
+                    { headers: { 'X-eBirdApiToken': EBIRD_API_KEY } }
+                );
+                if (!resp.ok) {
+                    state.checklistPickerError = `eBird returned an error (${resp.status}). Please try again.`;
+                    state.checklistPickerLoading = false;
+                    render();
+                    return;
+                }
+                const data = await resp.json();
+                if (!data || data.length === 0) {
+                    state.checklistPickerError = 'No recent checklists found in your region.';
+                    state.checklistPickerLoading = false;
+                    render();
+                    return;
+                }
+
+                // Filter by username (case-insensitive match against userDisplayName)
+                const username = state.eBirdUsername.toLowerCase();
+                const userChecklists = data.filter(cl =>
+                    (cl.userDisplayName || '').toLowerCase() === username ||
+                    (cl.userDisplayName || '').toLowerCase().includes(username)
+                );
+
+                if (userChecklists.length === 0) {
+                    state.checklistPickerError = `No recent checklists found for "${state.eBirdUsername}" in your region (${regionCode}). Note: your eBird display name may differ from your username — try entering your display name as it appears on eBird.`;
+                    state.checklistPickerLoading = false;
+                    render();
+                    return;
+                }
+
+                state.eBirdChecklists = userChecklists.slice(0, 20);
+                state.checklistPickerLoading = false;
+                render();
+            } catch (e) {
+                state.checklistPickerError = 'Could not reach eBird. Please check your connection.';
+                state.checklistPickerLoading = false;
+                render();
+            }
+        }
+
+        async function selecteBirdChecklist(subId, locName, isoObsDate, subnational2Name) {
+            state.fetchingChecklist = subId;
+            render();
+            try {
+                // Step 1: fetch the full checklist
+                const resp = await fetch(
+                    `https://api.ebird.org/v2/product/checklist/view/${subId}`,
+                    { headers: { 'X-eBirdApiToken': EBIRD_API_KEY } }
+                );
+                if (!resp.ok) throw new Error(`eBird returned ${resp.status}`);
+                const data = await resp.json();
+                const date = isoObsDate ? isoObsDate.split(' ')[0] : new Date().toISOString().split('T')[0];
+
+                // Step 2: collect all species codes from this checklist
+                const obsList = data.obs || [];
+                const speciesCodes = [...new Set(obsList.map(o => o.speciesCode).filter(Boolean))];
+
+                // Step 3: translate species codes -> common names via eBird taxonomy endpoint
+                // Our frequency data is keyed by common name, so we must translate first
+                let codeToName = {};
+                if (speciesCodes.length > 0) {
+                    const taxResp = await fetch(
+                        `https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&species=${speciesCodes.join(',')}`,
+                        { headers: { 'X-eBirdApiToken': EBIRD_API_KEY } }
+                    );
+                    if (taxResp.ok) {
+                        const taxData = await taxResp.json();
+                        taxData.forEach(t => { codeToName[t.speciesCode] = t.comName; });
+                    }
+                }
+
+                // Step 4: build observations using common names for scoring
+                const observations = obsList.map(o => ({
+                    species: codeToName[o.speciesCode] || o.speciesCode, // fallback to code if lookup fails
+                    speciesCode: o.speciesCode,
+                    date,
+                    count: (o.howManyStr && o.howManyStr.toUpperCase() !== 'X') ? parseInt(o.howManyStr, 10) || 1 : 1
+                }));
+
+                state.showChecklistPicker = false;
+                state.fetchingChecklist = null;
+                await processeBirdChecklist(observations, date, locName, subnational2Name);
+            } catch (e) {
+                state.fetchingChecklist = null;
+                state.checklistPickerError = `Could not load checklist: ${e.message}`;
+                render();
+            }
+        }
+
+        async function processeBirdChecklist(observations, date, locName, subnational2Name) {
+            // locName is the specific eBird location (e.g. "Kalamalka Lake (Vernon)")
+            // We need to match it to one of our scoring regions (e.g. "North Okanagan")
+            // Try exact match first, then partial, then fall back to lastRegion, then prompt
+            console.log('processeBirdChecklist: locName =', JSON.stringify(locName));
+            console.log('processeBirdChecklist: available regions =', state.regions);
+            console.log('processeBirdChecklist: lastRegion =', state.lastRegion);
+
+            // subnational2Name (e.g. "North Okanagan") is the most reliable match
+            let matchedRegion = subnational2Name
+                ? state.regions.find(r => r.toLowerCase() === subnational2Name.toLowerCase())
+                : null;
+            // Fall back to matching against the specific location name
+            if (!matchedRegion) {
+                matchedRegion = state.regions.find(r => r.toLowerCase() === locName.toLowerCase());
+            }
+            if (!matchedRegion) {
+                matchedRegion = state.regions.find(r =>
+                    locName.toLowerCase().includes(r.toLowerCase()) ||
+                    r.toLowerCase().includes(locName.toLowerCase().split(',')[0].trim())
+                );
+            }
+
+            console.log('processeBirdChecklist: matchedRegion =', matchedRegion);
+
+            if (!matchedRegion) {
+                if (state.lastRegion) {
+                    console.log('processeBirdChecklist: falling back to lastRegion =', state.lastRegion);
+                    matchedRegion = state.lastRegion;
+                } else {
+                    console.log('processeBirdChecklist: no match, showing region prompt');
+                    state.pendingeBirdObservations = { observations, date, locName };
+                    state.showRegionPrompt = true;
+                    render();
+                    return;
+                }
+            }
+
+            await scoreFetchedChecklist(observations, date, matchedRegion);
+        }
+
+        async function scoreFetchedChecklist(observations, date, region) {
             const currentTotalScore = state.checklists.reduce((sum, c) => sum + c.total_score, 0);
             const previousSeeds = Math.floor(currentTotalScore / 10000);
 
             const results = [];
             const tempHistory = [...state.userHistory];
-            let total = 0, date = null;
+            let total = 0;
 
-            for (const row of parsed.data) {
-                const species = row['Species'], obsDate = row['Observation Date'], countRaw = row['Count'];
-                if (!species || !obsDate) continue;
-                let count = (countRaw && countRaw.toUpperCase() !== 'X') ? parseInt(countRaw, 10) : 1;
-                if (!date) date = obsDate;
-                const res = scoreObservation(species.trim().replace(/\s+/g, ' '), obsDate.trim(), isNaN(count)?1:count, tempHistory, state.frequencyData, region);
+            console.log('scoreFetchedChecklist: region =', region, '| date =', date, '| obs count =', observations.length);
+            for (const obs of observations) {
+                const { species, count } = obs;
+                if (!species) continue;
+                const week = weekOfYear(date);
+                const freqKey = `${species.trim()}_${week}_${region}`;
+                const freqHit = state.frequencyData[freqKey];
+                if (!freqHit) console.warn('No freq data for key:', JSON.stringify(freqKey));
+                const res = scoreObservation(
+                    species.trim(),
+                    date,
+                    isNaN(count) ? 1 : count,
+                    tempHistory,
+                    state.frequencyData,
+                    region
+                );
                 results.push(res);
                 total += res.score;
-                if (!res.error) { for (let i = 0; i < count; i++) tempHistory.push({ date: obsDate, species_code: species.trim() }); }
+                if (!res.error) {
+                    for (let i = 0; i < count; i++) {
+                        tempHistory.push({ date, species_code: species.trim() });
+                    }
+                }
             }
-                
+            console.log('scoreFetchedChecklist: total =', total, '| results sample =', results.slice(0,3));
+
             const seedsEarnedNow = Math.max(0, Math.floor((currentTotalScore + total) / 10000) - previousSeeds);
             state.birdseed += seedsEarnedNow;
-            state.checklists = [{ id: Date.now(), date, region, total_score: total, species_count: results.length, observations: results, seed_earned: seedsEarnedNow }, ...state.checklists];
+
+            // Check Bird of the Week
+            const botWFound = checkBirdOfWeekFound(results);
+            let appliedBotW = false;
+            if (botWFound) {
+                state.birdOfWeek.found = true;
+                appliedBotW = true;
+                state.showBirdOfWeekFound = true;
+            }
+
+            const botWActive = state.birdOfWeek && state.birdOfWeek.found && state.birdOfWeek.weekStart === getCurrentWeekMonday();
+            if (botWActive) {
+                total = 0;
+                results.forEach(o => {
+                    o.score = o.score * 2;
+                    o.botw_doubled = true;
+                    total += o.score;
+                });
+            }
+
+            state.checklists = [{
+                id: Date.now(),
+                date,
+                region,
+                total_score: total,
+                species_count: results.length,
+                observations: results,
+                seed_earned: seedsEarnedNow,
+                botw_applied: botWActive,
+                botw_unlocked: appliedBotW
+            }, ...state.checklists];
+
             state.lastRegion = region;
             state.userHistory = tempHistory;
             state.currentResult = state.checklists[0];
-            state.showRegionPrompt = false;
+            state.pendingeBirdObservations = null;
             await saveData();
             render();
+            initBirdOfWeek();
         }
 
         /************************************************************
@@ -385,6 +859,9 @@
                     ${state.showRegionPrompt ? renderRegionPrompt() : ''}
                     ${state.showHowItWorks ? renderHowItWorks() : ''}
                     ${state.hatchResult ? renderHatchModal() : ''}
+                    ${state.showBirdOfWeekFound ? renderBirdOfWeekFoundModal() : ''}
+                    ${state.showChecklistPicker ? renderChecklistPicker() : ''}
+                    ${state.showUsernamePrompt ? renderUsernamePrompt() : ''}
                     ${!state.showUserSelect ? `
                         <div class="fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40">
                             <button onclick="state.view='home';render()" class="p-2 flex flex-col items-center ${state.view==='home'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🏆</span><span class="text-[10px] uppercase mt-1">Score</span></button>
@@ -395,6 +872,14 @@
                     ` : ''}
                 </div>
             `;
+
+            // After DOM update: trigger sound + confetti if BotW modal just appeared
+            if (state.showBirdOfWeekFound) {
+                requestAnimationFrame(() => {
+                    playBirdFoundSound();
+                    spawnConfetti('botw-confetti');
+                });
+            }
         }
 
         function renderUserSelect() {
@@ -403,6 +888,223 @@
                 <div class="space-y-3 mb-8">${state.users.map(u => `<div class="flex gap-2"><button onclick="selectUser('${u}')" class="flex-1 p-5 border-2 rounded-2xl font-black text-lg hover:border-blue-500 hover:bg-blue-50 text-left transition-all">🐦 ${u}</button>${state.showManageUsers ? `<button onclick="deleteUser('${u}')" class="bg-red-50 text-red-600 border-2 border-red-100 px-4 rounded-2xl font-bold">✕</button>` : ''}</div>`).join('')}</div>
                 <div class="flex gap-2 border-t pt-6"><input id="newU" type="text" placeholder="Add Birding Partner" class="flex-1 border-2 p-3 rounded-xl outline-none focus:border-blue-500 transition-all" /><button onclick="createUser(document.getElementById('newU').value)" class="bg-blue-600 text-white px-6 rounded-xl font-bold shadow-lg shadow-blue-200">Add</button></div>
             </div>`;
+        }
+
+        /************************************************************
+         * BIRD OF THE WEEK - RE-ROLL & CELEBRATION
+         ************************************************************/
+        async function rerollBirdOfWeek() {
+            if (state.birdOfWeekLoading || !state.birdOfWeek) return;
+            const regionCode = state.birdOfWeek.regionCode;
+
+            // Track all species seen so far this week to avoid repeats
+            const seenSpecies = [...(state.birdOfWeek.seenSpecies || []), state.birdOfWeek.species];
+
+            state.birdOfWeekLoading = true;
+            state.birdOfWeekError = null;
+            render();
+
+            const result = await fetchBirdOfWeek(regionCode, seenSpecies);
+
+            if (!result) {
+                state.birdOfWeekError = 'Could not reach the eBird service. Please try again.';
+            } else if (result.total === 0) {
+                state.birdOfWeekError = 'No notable birds have been reported in your region recently.';
+            } else {
+                state.birdOfWeek = {
+                    species: result.species,
+                    weekStart: getCurrentWeekMonday(),
+                    regionCode,
+                    region: state.birdOfWeek.region,
+                    found: false,
+                    seenSpecies  // carry forward the history so future re-rolls keep avoiding these
+                };
+                await saveData();
+            }
+
+            state.birdOfWeekLoading = false;
+            render();
+        }
+
+        function playBirdFoundSound() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+                const playNote = (freq, start, duration, type = 'sine', gain = 0.3) => {
+                    const osc = ctx.createOscillator();
+                    const gainNode = ctx.createGain();
+                    osc.connect(gainNode);
+                    gainNode.connect(ctx.destination);
+                    osc.type = type;
+                    osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                    gainNode.gain.setValueAtTime(0, ctx.currentTime + start);
+                    gainNode.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.02);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+                    osc.start(ctx.currentTime + start);
+                    osc.stop(ctx.currentTime + start + duration);
+                };
+
+                // Triumphant fanfare: ascending arpeggio then chord
+                playNote(523.25, 0.0,  0.18, 'triangle', 0.35); // C5
+                playNote(659.25, 0.15, 0.18, 'triangle', 0.35); // E5
+                playNote(783.99, 0.30, 0.18, 'triangle', 0.35); // G5
+                playNote(1046.5, 0.45, 0.40, 'triangle', 0.40); // C6
+                // Harmony layer
+                playNote(659.25, 0.45, 0.40, 'sine', 0.20);     // E5
+                playNote(783.99, 0.45, 0.40, 'sine', 0.18);     // G5
+                // Sparkle flourish
+                playNote(1318.5, 0.80, 0.12, 'sine', 0.15);     // E6
+                playNote(1568.0, 0.90, 0.12, 'sine', 0.15);     // G6
+                playNote(2093.0, 1.00, 0.25, 'sine', 0.12);     // C7
+                // Final big chord
+                playNote(523.25, 1.20, 0.6, 'triangle', 0.25);
+                playNote(659.25, 1.20, 0.6, 'triangle', 0.22);
+                playNote(783.99, 1.20, 0.6, 'triangle', 0.20);
+                playNote(1046.5, 1.20, 0.6, 'triangle', 0.30);
+            } catch(e) { console.log('Audio not available', e); }
+        }
+
+        function spawnConfetti(containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const colors = ['#34d399','#fbbf24','#f87171','#60a5fa','#a78bfa','#fb923c'];
+            for (let i = 0; i < 28; i++) {
+                setTimeout(() => {
+                    const el = document.createElement('div');
+                    el.className = 'confetti-piece';
+                    el.style.cssText = `
+                        left: ${10 + Math.random() * 80}%;
+                        top: ${-10 + Math.random() * 20}%;
+                        background: ${colors[Math.floor(Math.random() * colors.length)]};
+                        animation-delay: ${Math.random() * 0.4}s;
+                        animation-duration: ${1.2 + Math.random() * 0.8}s;
+                        transform: rotate(${Math.random()*360}deg);
+                        border-radius: ${Math.random() > 0.5 ? '50%' : '2px'};
+                        width: ${6 + Math.random() * 8}px;
+                        height: ${6 + Math.random() * 8}px;
+                    `;
+                    container.appendChild(el);
+                    setTimeout(() => el.remove(), 2500);
+                }, i * 40);
+            }
+        }
+
+        function renderBirdOfWeekFoundModal() {
+            const botw = state.birdOfWeek;
+            if (!botw) return '';
+            return `
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background: rgba(0,0,0,0.75); backdrop-filter: blur(8px);"
+                 onclick="if(event.target===this){state.showBirdOfWeekFound=false;render();}">
+                <div id="botw-modal" class="botw-modal-enter botw-glow relative bg-gradient-to-b from-emerald-400 via-teal-500 to-cyan-600 rounded-[40px] p-8 max-w-sm w-full text-center overflow-hidden shadow-2xl">
+
+                    <!-- Confetti container -->
+                    <div id="botw-confetti" class="absolute inset-0 pointer-events-none overflow-hidden rounded-[40px]"></div>
+
+                    <!-- Ripple background effect -->
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div style="width:200px;height:200px;border-radius:50%;border:3px solid rgba(255,255,255,0.3);animation:botwRipple 2s ease-out infinite;"></div>
+                        <div style="position:absolute;width:200px;height:200px;border-radius:50%;border:3px solid rgba(255,255,255,0.2);animation:botwRipple 2s ease-out 0.7s infinite;"></div>
+                    </div>
+
+                    <!-- Stars -->
+                    <div class="absolute top-4 left-6 text-2xl botw-star-spin" style="animation-delay:0.1s">⭐</div>
+                    <div class="absolute top-8 right-8 text-xl botw-star-spin" style="animation-delay:0.3s">✨</div>
+                    <div class="absolute bottom-16 left-4 text-lg botw-star-spin" style="animation-delay:0.5s">🌟</div>
+                    <div class="absolute bottom-20 right-5 text-2xl botw-star-spin" style="animation-delay:0.2s">⭐</div>
+
+                    <div class="relative z-10">
+                        <!-- Badge -->
+                        <div class="inline-block bg-white/20 border border-white/40 text-white text-[10px] font-black uppercase tracking-[0.2em] px-4 py-1.5 rounded-full mb-4">
+                            🏆 Bird of the Week — Found!
+                        </div>
+
+                        <!-- Flying bird emoji -->
+                        <div class="text-7xl mb-2 botw-bird-fly select-none">🐦</div>
+
+                        <!-- Species name -->
+                        <h2 class="botw-title-pop font-black text-3xl text-white mb-1 leading-tight drop-shadow-lg">${botw.species}</h2>
+                        <div class="text-white/70 text-xs font-bold uppercase tracking-widest mb-6">${botw.region}</div>
+
+                        <!-- Reward banner -->
+                        <div class="bg-white/15 border border-white/30 rounded-2xl p-4 mb-6 backdrop-blur-sm">
+                            <div class="text-white/80 text-xs font-black uppercase tracking-widest mb-1">Reward Unlocked</div>
+                            <div class="botw-shimmer-text text-2xl font-black" style="-webkit-text-fill-color:transparent;background:linear-gradient(90deg,#fff,#fef08a,#fff,#6ee7b7,#fff);background-size:200% auto;-webkit-background-clip:text;background-clip:text;animation:botwShimmer 1.5s linear infinite;">
+                                ✨ 2× SCORE MULTIPLIER ✨
+                            </div>
+                            <div class="text-white/70 text-[11px] font-bold mt-1">All checklists this week are doubled!</div>
+                        </div>
+
+                        <button onclick="state.showBirdOfWeekFound=false; render();"
+                            class="w-full bg-white text-emerald-700 font-black text-lg py-4 rounded-2xl shadow-xl active:scale-95 transition-transform">
+                            Let's GO! 🚀
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderBirdOfWeekBanner() {
+            if (state.birdOfWeekLoading) {
+                return `<div class="mb-4 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-3xl animate-pulse text-center text-xs font-black text-emerald-400 uppercase tracking-widest">🔍 Finding Bird of the Week...</div>`;
+            }
+
+            // Show error state with retry button
+            if (state.birdOfWeekError) {
+                return `<div class="mb-4 p-4 bg-red-50 border-2 border-red-200 rounded-3xl text-center">
+                    <div class="text-xs font-black text-red-500 uppercase tracking-widest mb-1">🐦 Bird of the Week</div>
+                    <div class="text-[11px] text-red-400 font-bold mb-3">${state.birdOfWeekError}</div>
+                    <button onclick="state.birdOfWeekError=null; state.birdOfWeek=null; initBirdOfWeek();" class="text-[10px] bg-red-100 hover:bg-red-200 text-red-600 font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-colors">↺ Retry</button>
+                </div>`;
+            }
+
+            if (!state.lastRegion) return '';
+
+            if (!state.birdOfWeek || !state.birdOfWeek.species) {
+                return `<div class="mb-4 p-4 bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl text-center text-xs font-black text-gray-400 uppercase tracking-widest">🐦 Upload a checklist to unlock Bird of the Week!</div>`;
+            }
+
+            const botw = state.birdOfWeek;
+            const weekStart = getCurrentWeekMonday();
+            if (botw.weekStart !== weekStart) {
+                // Don't call initBirdOfWeek() from inside render — schedule it outside the render cycle
+                setTimeout(() => initBirdOfWeek(), 0);
+                return `<div class="mb-4 p-4 bg-emerald-50 border-2 border-emerald-200 rounded-3xl animate-pulse text-center text-xs font-black text-emerald-400 uppercase tracking-widest">🔍 Refreshing Bird of the Week...</div>`;
+            }
+
+            const rerollBtn = `<button onclick="rerollBirdOfWeek()" title="Re-roll Bird of the Week"
+                class="w-full mt-1 bg-white/15 hover:bg-white/25 border border-white/20 text-white/80 hover:text-white text-xs font-black px-3 py-2 rounded-2xl transition-all active:scale-95 uppercase tracking-widest">
+                🎲 Re-roll Bird of the Week
+            </button>`;
+
+            if (botw.found) {
+                return `
+                <div class="mb-4">
+                    <div class="p-5 bg-gradient-to-br from-emerald-400 via-teal-500 to-cyan-600 rounded-3xl shadow-xl text-white relative overflow-hidden botw-glow" style="cursor:pointer" onclick="state.showBirdOfWeekFound=true;render()">
+                        <div class="absolute -right-6 -bottom-4 text-8xl opacity-10 select-none" style="transform:rotate(-20deg)">🐦</div>
+                        <div class="absolute -left-3 -top-3 text-6xl opacity-10 select-none">⭐</div>
+                        <div class="text-[10px] font-black uppercase tracking-[0.18em] mb-2 opacity-80">🏆 Bird of the Week — FOUND!</div>
+                        <div class="text-2xl font-black mb-1 drop-shadow">${botw.species}</div>
+                        <div class="flex items-center gap-2 mt-2">
+                            <span class="bg-white/25 border border-white/30 text-white text-xs font-black px-3 py-1 rounded-full">✨ 2× All Scores Active</span>
+                        </div>
+                        <div class="text-[10px] opacity-60 mt-3 font-bold uppercase tracking-tight">Week of ${botw.weekStart} • ${botw.region} • Tap to celebrate 🎉</div>
+                    </div>
+                    <div class="bg-emerald-500/20 rounded-b-3xl -mt-3 pt-5 pb-3 px-3">${rerollBtn}</div>
+                </div>`;
+            } else {
+                return `
+                <div class="mb-4">
+                    <div class="p-5 bg-gradient-to-br from-amber-400 to-orange-500 rounded-3xl shadow-lg text-white relative overflow-hidden">
+                        <div class="absolute -right-4 -top-4 text-7xl opacity-15 select-none">🔭</div>
+                        <div class="text-[10px] font-black uppercase tracking-[0.18em] mb-2 opacity-80">🐦 Bird of the Week</div>
+                        <div class="text-2xl font-black mb-1">${botw.species}</div>
+                        <div class="text-xs font-bold opacity-90">Spot this bird to unlock <span class="bg-white/20 border border-white/30 px-2 py-0.5 rounded-full font-black">2× ALL scores</span> for the week!</div>
+                        <div class="text-[10px] opacity-60 mt-3 font-bold uppercase tracking-tight">Week of ${botw.weekStart} • ${botw.region}</div>
+                    </div>
+                    <div class="bg-orange-400/20 rounded-b-3xl -mt-3 pt-5 pb-3 px-3">${rerollBtn}</div>
+                </div>`;
+            }
         }
 
         function renderHome(stats) {
@@ -416,12 +1118,14 @@
                     <div><div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Banked Seed</div><div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div></div>
                     <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Earn 1 seed for every 10k cumulative points!</div>
                 </div>
-                <label class="block mb-4 cursor-pointer group">
+                <button onclick="openChecklistPicker()" class="block w-full mb-4 group">
                     <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all">
-                        <div class="text-5xl mb-3">📤</div><div class="text-2xl">Upload eBird CSV</div>
+                        <div class="text-5xl mb-3">🔍</div>
+                        <div class="text-2xl">Fetch My Checklists</div>
+                        ${state.eBirdUsername ? `<div class="text-sm opacity-70 mt-2 font-bold">@${state.eBirdUsername}</div>` : `<div class="text-sm opacity-70 mt-2 font-bold">Connect your eBird account</div>`}
                     </div>
-                    <input type="file" onchange="handleUpload(event)" class="hidden" />
-                </label>
+                </button>
+                ${renderBirdOfWeekBanner()}
                 <button onclick="state.showHowItWorks=true;render()" class="w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors">How is Score Calculated?</button>
                 ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class="text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl">No data uploaded yet.</div>`}
             `;
@@ -458,18 +1162,44 @@
                 </div>
                 <h3 class="text-xs font-black text-gray-400 uppercase tracking-widest mb-4">Trophy Room (${state.birds.length})</h3>
                 <div class="grid grid-cols-2 gap-4">
-                    ${state.birds.map(bird => `<div class="bg-white p-4 rounded-3xl border border-${bird.rarity_color}-100 shadow-sm relative overflow-hidden"><div class="text-xs font-black text-${bird.rarity_color}-600 uppercase mb-1 tracking-tighter">${bird.rarity}</div><div class="font-black text-gray-800 leading-tight mb-2">${bird.species}</div><div class="text-[10px] text-gray-400">From ${bird.region}</div></div>`).join('')}
+                    ${state.birds.map(bird => `
+                        <div class="bg-white p-4 rounded-3xl border border-${bird.rarity_color}-100 shadow-sm relative overflow-hidden flex flex-col h-full">
+                            <div class="text-xs font-black text-${bird.rarity_color}-600 uppercase mb-1 tracking-tighter">${bird.rarity}</div>
+                            <div class="font-black text-gray-800 leading-tight mb-2">${bird.species}</div>
+                            <p class="text-[10px] text-gray-500 italic flex-grow mb-2 leading-tight">"${bird.fact || 'A mysterious find...'}"</p>
+                            <div class="text-[10px] text-gray-400 mt-auto">From ${bird.region}</div>
+                        </div>
+                    `).join('')}
                 </div>
             `;
         }
 
         function renderHatchModal() {
             const bird = state.hatchResult;
-            return `<div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fadeIn"><div class="bg-white rounded-[40px] p-10 max-w-sm text-center shadow-2xl relative overflow-hidden"><div class="absolute inset-0 bg-gradient-to-b from-${bird.rarity_color}-50 to-white -z-10"></div><div class="text-sm font-black text-gray-400 uppercase tracking-widest mb-4">You Hatched A...</div><div class="text-6xl mb-6 animate-bounce">🐦</div><h2 class="font-black text-3xl text-gray-900 mb-2">${bird.species}</h2><div class="inline-block bg-${bird.rarity_color}-100 text-${bird.rarity_color}-700 px-4 py-1 rounded-full text-xs font-black uppercase tracking-widest mb-2 border border-${bird.rarity_color}-200">${bird.rarity}</div><div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6">Region: ${bird.region}</div><button onclick="state.hatchResult=null; render()" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-200">Keep!</button></div></div>`;
+            return `
+                <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fadeIn">
+                    <div class="bg-white rounded-[40px] p-10 max-w-sm text-center shadow-2xl relative overflow-hidden">
+                        <div class="absolute inset-0 bg-gradient-to-b from-${bird.rarity_color}-50 to-white -z-10"></div>
+                        <div class="text-sm font-black text-gray-400 uppercase tracking-widest mb-4">You Hatched A...</div>
+                        <div class="text-6xl mb-6 animate-bounce">🐦</div>
+                        <h2 class="font-black text-3xl text-gray-900 mb-2">${bird.species}</h2>
+                        <div class="inline-block bg-${bird.rarity_color}-100 text-${bird.rarity_color}-700 px-4 py-1 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-${bird.rarity_color}-200">${bird.rarity}</div>
+                        
+                        <div class="bg-white/60 p-4 rounded-2xl mb-6 border border-gray-100 italic text-gray-700 text-sm leading-relaxed">
+                            "${bird.fact || 'Calculating amazing facts...'}"
+                        </div>
+                        
+                        <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6">Region: ${bird.region}</div>
+                        <button onclick="state.hatchResult=null; render()" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-200">Keep!</button>
+                    </div>
+                </div>`;
         }
 
         function renderChecklistCard(c, isLatest) {
-            return `<div class="bg-white p-6 rounded-3xl shadow-xl border relative">${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-yellow-400 text-yellow-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🟡</div>` : ''}
+            const botwBadge = c.botw_unlocked 
+                ? `<div class="absolute -top-3 -left-3 bg-emerald-500 text-white px-3 py-1.5 rounded-2xl font-black text-xs shadow-xl border-2 border-white">🐦 Bird of Week Found!</div>`
+                : (c.botw_applied ? `<div class="absolute -top-3 -left-3 bg-teal-500 text-white px-3 py-1.5 rounded-2xl font-black text-xs shadow-xl border-2 border-white">✨ 2× Week Bonus</div>` : '');
+            return `<div class="bg-white p-6 rounded-3xl shadow-xl border relative">${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-yellow-400 text-yellow-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🟡</div>` : ''}${botwBadge}
                 <div class="flex justify-between items-center mb-1"><h2 class="font-black text-xl text-gray-900">${isLatest ? 'Last Checklist' : ''}</h2><div class="text-3xl font-black text-blue-600">${c.total_score.toLocaleString()}</div></div>
                 <div class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-6">📅 ${c.date} • 📍 ${c.region}</div>
                 <div class="space-y-2">${c.observations.map((o, i) => renderObservationRow(o, i, 'home')).join('')}</div></div>`;
@@ -488,7 +1218,8 @@
                     <div class="flex justify-between"><span>Base Score (F: ${(o.frequency*100).toFixed(2)}%)</span><span class="font-bold text-blue-600">${o.base_score}</span></div>
                     <div class="flex justify-between"><span>Seasonal Multiplier</span><span class="font-bold text-orange-500">×${o.seasonal_bonus}</span></div>
                     <div class="flex justify-between"><span>Novelty Multiplier</span><span class="font-bold text-purple-600">×${o.novelty_multiplier}</span></div>
-                    <div class="flex justify-between text-gray-800"><span>Observation Multiplier</span><span class="font-bold text-green-600">×${o.count_multiplier}</span></div>
+                    <div class="flex justify-between"><span>Observation Multiplier</span><span class="font-bold text-green-600">×${o.count_multiplier}</span></div>
+                    ${o.botw_doubled ? `<div class="flex justify-between text-emerald-700"><span>🐦 Bird of the Week Bonus</span><span class="font-bold">×2</span></div>` : ''}
                     <div class="flex justify-between font-black border-t pt-2 text-gray-900 text-sm"><span>Final Points</span><span>${o.score.toLocaleString()}</span></div>
                 </div>` : ''}</div>`;
         }
@@ -499,7 +1230,10 @@
         }
 
         function renderRegionPrompt() {
-            return `<div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl"><h2 class="font-black text-2xl mb-2 text-gray-900">Location</h2><p class="text-gray-400 text-sm mb-6">Frequencies vary by region.</p><div class="space-y-1">${state.regions.map(r => `<button onclick="processChecklist('${r}')" class="w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between"><span>${r}</span><span class="text-blue-500">→</span></button>`).join('')}</div><button onclick="state.showRegionPrompt=false; render();" class="w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest">Back</button></div></div>`;
+            const onSelect = state.pendingeBirdObservations
+                ? `(r) => { state.showRegionPrompt=false; scoreFetchedChecklist(state.pendingeBirdObservations.observations, state.pendingeBirdObservations.date, r); }`
+                : `(r) => processChecklist(r)`;
+            return `<div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-3xl p-8 w-full max-w-sm max-h-[70vh] overflow-y-auto shadow-2xl"><h2 class="font-black text-2xl mb-2 text-gray-900">Pick Your Region</h2><p class="text-gray-400 text-sm mb-6">The checklist location didn't match any known region. Choose the closest one.</p><div class="space-y-1">${state.regions.map(r => `<button onclick="state.showRegionPrompt=false; ${state.pendingeBirdObservations ? `scoreFetchedChecklist(state.pendingeBirdObservations.observations, state.pendingeBirdObservations.date, '${r}')` : `processChecklist('${r}')`}" class="w-full text-left p-4 border-b hover:bg-blue-50 font-bold text-gray-800 transition-colors flex justify-between"><span>${r}</span><span class="text-blue-500">→</span></button>`).join('')}</div><button onclick="state.showRegionPrompt=false; state.pendingeBirdObservations=null; render();" class="w-full mt-6 text-gray-400 font-black uppercase text-xs tracking-widest">Cancel</button></div></div>`;
         }
 
         function renderHowItWorks() {
@@ -508,7 +1242,106 @@
                 <div class="flex gap-4"><div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🟡</div><div><h4 class="font-black text-gray-900">Birdseed</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Earn 1 seed for every 10,000 cumulative points (from all checklists!). Use seed to buy eggs in the Nest.</p></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-purple-50 w-14 h-14 rounded-2xl flex items-center justify-center">✨</div><div><h4 class="font-black text-gray-900">Novelty Bonuses</h4><ul class="text-[11px] text-gray-500 space-y-1 mt-1 font-bold"><li>✨ <span class="text-green-600 uppercase tracking-tighter">Life Bird:</span> 4x bonus</li><li>🐦 <span class="text-blue-500 uppercase tracking-tighter">2nd Sighting:</span> 2x bonus</li></ul></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-green-50 w-14 h-14 rounded-2xl flex items-center justify-center">🔢</div><div><h4 class="font-black text-gray-900">Observation Multiplier</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every bird counts! Independent sightings of a species count towards your score.</p></div></div>
+                <div class="flex gap-4"><div class="text-3xl bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center">🐦</div><div><h4 class="font-black text-gray-900">Bird of the Week</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Each Monday, a notable bird from your recent region becomes the Bird of the Week. Find it in any checklist that week to double ALL of your scores for the rest of the week!</p></div></div>
             </div><button onclick="state.showHowItWorks=false;render()" class="w-full bg-gray-900 text-white mt-10 py-5 rounded-2xl font-black text-lg shadow-xl hover:bg-blue-600 transition-all">Got it</button></div></div>`;
+        }
+
+
+        function renderUsernamePrompt() {
+            return `
+            <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 z-50">
+                <div class="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl">
+                    <div class="text-5xl mb-4 text-center">🐦</div>
+                    <h2 class="font-black text-2xl mb-2 text-gray-900 text-center">Connect eBird</h2>
+                    <p class="text-gray-400 text-sm mb-6 text-center leading-relaxed">Enter your eBird username to fetch your checklists directly — no more CSV downloads!</p>
+                    <input id="eBirdUsernameInput" type="text" placeholder="Your eBird username"
+                        class="w-full border-2 p-4 rounded-2xl outline-none focus:border-blue-500 transition-all font-bold text-gray-800 mb-3 text-center"
+                        onkeydown="if(event.key==='Enter') saveeBirdUsername(document.getElementById('eBirdUsernameInput').value)" />
+                    <p class="text-[10px] text-gray-400 text-center mb-6 font-bold">Enter your display name exactly as it appears on your eBird profile page — not your email address.</p>
+                    <button onclick="saveeBirdUsername(document.getElementById('eBirdUsernameInput').value)"
+                        class="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-200 mb-3">
+                        Connect Account →
+                    </button>
+                    <button onclick="state.showUsernamePrompt=false; render()"
+                        class="w-full text-gray-400 font-black uppercase text-xs tracking-widest py-2">
+                        Cancel
+                    </button>
+                </div>
+            </div>`;
+        }
+
+        function renderChecklistPicker() {
+            let body = '';
+
+            if (state.checklistPickerLoading) {
+                body = `<div class="text-center py-16 animate-pulse">
+                    <div class="text-5xl mb-4">🔍</div>
+                    <div class="font-black text-gray-400 uppercase tracking-widest text-sm">Fetching checklists...</div>
+                </div>`;
+            } else if (state.checklistPickerError) {
+                body = `<div class="text-center py-10">
+                    <div class="text-4xl mb-3">⚠️</div>
+                    <div class="font-bold text-red-500 text-sm mb-6">${state.checklistPickerError}</div>
+                    <button onclick="state.eBirdUsername=null; state.checklistPickerError=null; state.showChecklistPicker=false; state.showUsernamePrompt=true; render()"
+                        class="text-xs font-black uppercase tracking-widest text-blue-500 border-2 border-blue-200 px-6 py-3 rounded-2xl">
+                        Change Username
+                    </button>
+                </div>`;
+            } else {
+                body = `<div class="space-y-3">
+                    ${state.eBirdChecklists.map(cl => {
+                        const date = cl.obsDt || 'Unknown date';
+                        const loc = cl.loc?.name || cl.locName || 'Unknown location';
+                        const numSpecies = cl.numSpecies || '?';
+                        const isLoading = state.fetchingChecklist === cl.subId;
+                        const region = (cl.loc && cl.loc.subnational2Name) ? cl.loc.subnational2Name : "";
+                        const isoDate = cl.isoObsDate || "";
+                        return `
+                        <button onclick="handleChecklistSelect(this)"
+                            data-subid="${cl.subId}" data-isodate="${isoDate}" data-region="${region}" data-loc="${loc}"
+                            class="w-full text-left bg-gray-50 hover:bg-blue-50 border-2 hover:border-blue-300 rounded-2xl p-4 transition-all active:scale-95 ${isLoading ? 'opacity-50 pointer-events-none' : ''}">
+                            <div class="flex justify-between items-center gap-3">
+                                <div class="flex-1 min-w-0">
+                                    <div class="font-black text-gray-900 text-sm leading-tight">${loc}</div>
+                                    <div class="text-[11px] text-gray-400 font-bold mt-1">📅 ${date}</div>
+                                </div>
+                                <div class="text-right flex-shrink-0">
+                                    ${isLoading
+                                        ? `<div class="text-xs font-black text-blue-500 animate-pulse">Loading...</div>`
+                                        : `<div class="text-xl font-black text-blue-600">${numSpecies}</div>
+                                           <div class="text-[10px] text-gray-400 font-bold uppercase">species</div>`
+                                    }
+                                </div>
+                            </div>
+                        </button>`;
+                    }).join('')}
+                </div>`;
+            }
+
+            return `
+            <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+                <div class="bg-white rounded-3xl w-full max-w-sm shadow-2xl flex flex-col" style="max-height: 85vh">
+                    <div class="p-6 border-b flex justify-between items-center flex-shrink-0">
+                        <div>
+                            <h2 class="font-black text-xl text-gray-900">My Checklists</h2>
+                            <div class="text-[11px] text-gray-400 font-bold mt-0.5">@${state.eBirdUsername}</div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="state.eBirdUsername=null; state.showChecklistPicker=false; state.showUsernamePrompt=true; render()"
+                                class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">
+                                Change
+                            </button>
+                            <button onclick="state.showChecklistPicker=false; render()"
+                                class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                    <div class="overflow-y-auto flex-1 p-4">
+                        ${body}
+                    </div>
+                </div>
+            </div>`;
         }
 
         loadData();
