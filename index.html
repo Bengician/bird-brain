@@ -135,6 +135,43 @@
         .mega-glow        { animation: megaGlow 1.4s ease-in-out infinite; }
         .rare-glow        { animation: rareGlow 1.4s ease-in-out infinite; }
         .total-score-anim { animation: totalScoreCount 0.4s ease-out both; }
+
+        /* Level-up splash */
+        @keyframes levelUpEntry {
+            0%   { opacity: 0; transform: scale(0.6) translateY(40px); }
+            65%  { transform: scale(1.05) translateY(-6px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes rankNameSlam {
+            0%   { opacity: 0; transform: scale(2) rotate(-4deg); letter-spacing: 0.4em; }
+            60%  { transform: scale(0.96) rotate(1deg); }
+            100% { opacity: 1; transform: scale(1) rotate(0deg); }
+        }
+        @keyframes levelUpShimmer {
+            0%   { background-position: -300% center; }
+            100% { background-position: 300% center; }
+        }
+        @keyframes levelUpPulse {
+            0%, 100% { opacity: 0.6; transform: scale(1); }
+            50%       { opacity: 1;   transform: scale(1.08); }
+        }
+        @keyframes starBurst {
+            0%   { transform: scale(0) rotate(0deg);   opacity: 0; }
+            50%  { transform: scale(1.4) rotate(180deg); opacity: 1; }
+            100% { transform: scale(1) rotate(360deg); opacity: 1; }
+        }
+        .levelup-entry    { animation: levelUpEntry 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .rankname-slam    { animation: rankNameSlam 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both; }
+        .levelup-shimmer  {
+            background: linear-gradient(90deg, #fff, #fde68a, #fff, #fbbf24, #fff);
+            background-size: 300% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: levelUpShimmer 2s linear infinite;
+        }
+        .levelup-pulse    { animation: levelUpPulse 1.6s ease-in-out infinite; }
+        .star-burst       { animation: starBurst 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
     </style>
 </head>
 <body>
@@ -325,7 +362,11 @@
             checklistPickerError: null,
             fetchingChecklist: null,   // subId of checklist currently being fetched
             // Reveal animation
-            reveal: null   // { checklistId, visibleObs[], done, animatedScore }
+            reveal: null,   // { checklistId, visibleObs[], done, animatedScore }
+            // Level-up
+            rankLevel: 0,           // 0=Fledgling … 4=Birding Legend
+            showLevelUp: false,     // level-up splash visible?
+            levelUpData: null       // { newRank, seedBonus }
         };
 
         const EGG_TYPES = [
@@ -333,6 +374,24 @@
             { id: 'speckled', name: 'Speckled Egg', cost: 5, color: 'bg-blue-100', emoji: '🪺', luck: 2 },
             { id: 'golden', name: 'Golden Egg', cost: 20, color: 'bg-yellow-200', emoji: '✨', luck: 3 }
         ];
+
+        // Ranks: threshold = total score needed to REACH that rank
+        const RANKS = [
+            { level: 0, name: 'Fledgling',       threshold: 0,      nextAt: 8000,   seedBonus: 0,  emoji: '🐣', color: 'from-gray-400 to-gray-500',         textColor: 'text-gray-600' },
+            { level: 1, name: 'Birder',           threshold: 8000,   nextAt: 20000,  seedBonus: 2,  emoji: '🐦', color: 'from-green-400 to-emerald-500',      textColor: 'text-emerald-600' },
+            { level: 2, name: 'Expert',           threshold: 20000,  nextAt: 40000,  seedBonus: 5,  emoji: '🦅', color: 'from-blue-400 to-indigo-500',        textColor: 'text-indigo-600' },
+            { level: 3, name: 'Ornithologist',    threshold: 40000,  nextAt: 70000,  seedBonus: 10, emoji: '🔭', color: 'from-purple-400 to-violet-600',      textColor: 'text-violet-600' },
+            { level: 4, name: 'Birding Legend',   threshold: 70000,  nextAt: 120000, seedBonus: 15, emoji: '🌟', color: 'from-amber-400 to-orange-500',       textColor: 'text-orange-600' },
+            { level: 5, name: 'Birding Legend ✦', threshold: 120000, nextAt: null,   seedBonus: 20, emoji: '👑', color: 'from-yellow-300 to-amber-500',       textColor: 'text-amber-600' },
+        ];
+
+        function getRankForScore(totalScore) {
+            let rank = RANKS[0];
+            for (const r of RANKS) {
+                if (totalScore >= r.threshold) rank = r;
+            }
+            return rank;
+        }
 
         /************************************************************
          * AI FACT GENERATION (via Supabase Edge Function)
@@ -405,6 +464,8 @@
                     }
                     // Restore eBird username
                     state.eBirdUsername = rawData.eBirdUsername || null;
+                    // Restore rank level
+                    state.rankLevel = rawData.rankLevel || 0;
                 } else {
                     state.checklists = [];
                     state.birdseed = 0;
@@ -454,7 +515,8 @@
                 eggs: state.eggs,
                 birds: state.birds,
                 birdOfWeek: state.birdOfWeek,
-                eBirdUsername: state.eBirdUsername
+                eBirdUsername: state.eBirdUsername,
+                rankLevel: state.rankLevel
             };
             await db.from('checklist_data').upsert({
                 username: state.currentUser,
@@ -823,6 +885,16 @@
             const seedsEarnedNow = Math.max(0, Math.floor((currentTotalScore + total) / 10000) - previousSeeds);
             state.birdseed += seedsEarnedNow;
 
+            // --- Level-up check ---
+            const newTotalScore = currentTotalScore + total;
+            const oldRank = getRankForScore(currentTotalScore);
+            const newRank = getRankForScore(newTotalScore);
+            let levelUpEvent = null;
+            if (newRank.level > oldRank.level) {
+                state.birdseed += newRank.seedBonus;
+                levelUpEvent = { newRank, seedBonus: newRank.seedBonus };
+            }
+
             // Check Bird of the Week
             const botWFound = checkBirdOfWeekFound(results);
             let appliedBotW = false;
@@ -860,9 +932,9 @@
             state.pendingeBirdObservations = null;
             await saveData();
             initBirdOfWeek();
-            // Kick off the rarity reveal sequence
+            // Kick off the rarity reveal sequence, then level-up splash if applicable
             state.view = 'home';
-            setTimeout(() => startReveal(state.checklists[0]), 80);
+            setTimeout(() => startReveal(state.checklists[0], levelUpEvent), 80);
         }
 
         /************************************************************
@@ -955,7 +1027,7 @@
             return i === -1 ? 99 : i;
         }
 
-        function startReveal(checklist) {
+        function startReveal(checklist, levelUpEvent) {
             // Sort: commons first, rarest last — drama builds to a climax
             const sorted = [...checklist.observations].sort(
                 (a, b) => rarityRank(a.rarity) - rarityRank(b.rarity)
@@ -989,7 +1061,7 @@
                     playRaritySound(obs.rarity);
 
                     if (isLast) {
-                        setTimeout(() => animateTotalScore(checklist.total_score), 250);
+                        setTimeout(() => animateTotalScore(checklist.total_score, levelUpEvent), 250);
                     }
                 }, delay);
 
@@ -997,7 +1069,7 @@
             });
         }
 
-        function animateTotalScore(target) {
+        function animateTotalScore(target, levelUpEvent) {
             const duration = 1100;
             const startTime = performance.now();
             let lastTickAt = 0;
@@ -1025,10 +1097,111 @@
                     state.reveal.animatedScore = target;
                     state.reveal.done = true;
                     playRevealCompleteSound();
-                    render(); // final full render to restore normal state
+                    render(); // final full render
+                    // Show level-up splash after a short pause if applicable
+                    if (levelUpEvent) {
+                        setTimeout(() => {
+                            state.rankLevel = levelUpEvent.newRank.level;
+                            state.levelUpData = levelUpEvent;
+                            state.showLevelUp = true;
+                            saveData();
+                            render();
+                            playLevelUpSound(levelUpEvent.newRank.level);
+                        }, 600);
+                    }
                 }
             }
             requestAnimationFrame(tick);
+        }
+
+        function playLevelUpSound(level) {
+            try {
+                const ctx = getAudioCtx();
+                // Each level gets a grander fanfare
+                const base = [261, 294, 330, 349, 392]; // C D E F G
+                // Rising arpeggio speed and pitch scales with level
+                const notes = [
+                    [392, 494, 587, 784],               // Birder - simple
+                    [392, 494, 587, 740, 880],           // Expert - add 2 notes
+                    [349, 440, 523, 659, 880, 1047],     // Ornithologist
+                    [330, 415, 523, 659, 830, 1047, 1319], // Legend
+                    [262, 330, 392, 494, 587, 740, 880, 1047, 1319], // Max
+                ][Math.min(level - 1, 4)];
+
+                notes.forEach((freq, i) => {
+                    const isLast = i === notes.length - 1;
+                    playNote(ctx, freq, i * 0.11, isLast ? 0.9 : 0.15, 'triangle', isLast ? 0.38 : 0.22);
+                    if (isLast) {
+                        // Harmony on final note
+                        playNote(ctx, freq * 1.25, i * 0.11, 0.9, 'sine', 0.15);
+                        playNote(ctx, freq * 1.5,  i * 0.11, 0.9, 'sine', 0.10);
+                    }
+                });
+                // Shimmer tail
+                const tailStart = notes.length * 0.11 + 0.3;
+                playNote(ctx, 1568, tailStart,        0.15, 'sine', 0.10);
+                playNote(ctx, 2093, tailStart + 0.12, 0.20, 'sine', 0.08);
+            } catch(e) {}
+        }
+
+        function renderLevelUpModal() {
+            const d = state.levelUpData;
+            if (!d) return '';
+            const rank = d.newRank;
+            const isMax = rank.nextAt === null;
+
+            return `
+            <div class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background: rgba(0,0,0,0.82); backdrop-filter: blur(10px);"
+                 onclick="if(event.target===this){state.showLevelUp=false;render();}">
+
+                <div id="levelup-confetti" class="fixed inset-0 pointer-events-none overflow-hidden"></div>
+
+                <div class="levelup-entry bg-gradient-to-b ${rank.color} rounded-[40px] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden">
+
+                    <!-- Background shimmer rings -->
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div class="levelup-pulse" style="width:300px;height:300px;border-radius:50%;border:3px solid rgba(255,255,255,0.2);position:absolute;"></div>
+                        <div class="levelup-pulse" style="width:220px;height:220px;border-radius:50%;border:2px solid rgba(255,255,255,0.15);position:absolute;animation-delay:0.4s;"></div>
+                    </div>
+
+                    <!-- Corner stars -->
+                    <div class="absolute top-5 left-5 text-2xl star-burst" style="animation-delay:0.4s">✨</div>
+                    <div class="absolute top-6 right-6 text-xl star-burst" style="animation-delay:0.6s">⭐</div>
+                    <div class="absolute bottom-20 left-4 text-lg star-burst" style="animation-delay:0.7s">🌟</div>
+                    <div class="absolute bottom-24 right-5 text-2xl star-burst" style="animation-delay:0.5s">✨</div>
+
+                    <div class="relative z-10">
+                        <!-- Badge -->
+                        <div class="inline-block bg-white/20 border border-white/40 text-white text-[10px] font-black uppercase tracking-[0.2em] px-4 py-1.5 rounded-full mb-5">
+                            🏅 Rank Up!
+                        </div>
+
+                        <!-- Big emoji -->
+                        <div class="text-7xl mb-4 levelup-pulse">${rank.emoji}</div>
+
+                        <!-- Rank name -->
+                        <div class="rankname-slam levelup-shimmer font-black text-4xl mb-2 leading-tight">${rank.name}</div>
+
+                        <!-- Seed bonus -->
+                        <div class="bg-white/20 border border-white/30 rounded-2xl px-5 py-3 inline-block mb-5">
+                            <div class="text-white font-black text-lg">+${rank.seedBonus} 🌾 Birdseed!</div>
+                            <div class="text-white/70 text-[10px] font-bold uppercase tracking-wider">Rank-up bonus</div>
+                        </div>
+
+                        <!-- Progress to next -->
+                        ${isMax
+                            ? `<div class="text-white/80 text-sm font-bold mb-6">You've reached the pinnacle of birding greatness. 🏆</div>`
+                            : `<div class="text-white/70 text-xs font-bold mb-2 uppercase tracking-widest">Next rank at ${rank.nextAt.toLocaleString()} pts</div>`
+                        }
+
+                        <button onclick="state.showLevelUp=false; render()"
+                            class="w-full bg-white/20 hover:bg-white/30 border-2 border-white/40 text-white py-4 rounded-2xl font-black text-lg transition-all active:scale-95">
+                            Let's Go! 🐦
+                        </button>
+                    </div>
+                </div>
+            </div>`;
         }
 
         /************************************************************
@@ -1054,7 +1227,7 @@
                         <div class="flex items-center gap-2">
                              ${state.currentUser ? `
                                 <div class="flex items-center bg-yellow-400/10 px-3 py-1 rounded-full border border-yellow-200">
-                                    <span class="text-xs font-black text-yellow-600 mr-1">🟡 ${state.birdseed}</span>
+                                    <span class="text-xs font-black text-yellow-600 mr-1">🌾 ${state.birdseed}</span>
                                 </div>
                                 <button onclick="state.showUserSelect=true;render()" class="text-sm bg-white border px-3 py-1 rounded-full font-bold shadow-sm">👤 ${state.currentUser}</button>
                              ` : ''}
@@ -1067,6 +1240,7 @@
                     ${state.showBirdOfWeekFound ? renderBirdOfWeekFoundModal() : ''}
                     ${state.showChecklistPicker ? renderChecklistPicker() : ''}
                     ${state.showUsernamePrompt ? renderUsernamePrompt() : ''}
+                    ${state.showLevelUp ? renderLevelUpModal() : ''}
                     ${!state.showUserSelect ? `
                         <div class="fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40">
                             <button onclick="state.view='home';render()" class="p-2 flex flex-col items-center ${state.view==='home'?'text-blue-600 font-bold':'text-gray-600'}"><span class="text-xl">🏆</span><span class="text-[10px] uppercase mt-1">Score</span></button>
@@ -1083,6 +1257,11 @@
                 requestAnimationFrame(() => {
                     playBirdFoundSound();
                     spawnConfetti('botw-confetti');
+                });
+            }
+            if (state.showLevelUp) {
+                requestAnimationFrame(() => {
+                    spawnConfetti('levelup-confetti');
                 });
             }
         }
@@ -1313,16 +1492,39 @@
         }
 
         function renderHome(stats) {
+            const rank = getRankForScore(stats.score);
+            const nextRank = RANKS[rank.level + 1];
+            const progressPct = nextRank
+                ? Math.min(100, Math.round(((stats.score - rank.threshold) / (rank.nextAt - rank.threshold)) * 100))
+                : 100;
+
             return `
-                <div class="grid grid-cols-3 gap-3 mb-6">
-                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-blue-600">${stats.obs}</div><div class="text-[10px] uppercase font-bold text-gray-400">Sightings</div></div>
-                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-green-600">${stats.spec}</div><div class="text-[10px] uppercase font-bold text-gray-400">Species</div></div>
-                    <div class="bg-white p-4 rounded-2xl shadow-sm border text-center"><div class="text-2xl font-black text-yellow-500">${stats.score.toLocaleString()}</div><div class="text-[10px] uppercase font-bold text-gray-400">Total Score</div></div>
+                <div class="grid grid-cols-4 gap-2 mb-4">
+                    <div class="bg-white p-3 rounded-2xl shadow-sm border text-center"><div class="text-xl font-black text-blue-600">${stats.obs}</div><div class="text-[10px] uppercase font-bold text-gray-400">Sightings</div></div>
+                    <div class="bg-white p-3 rounded-2xl shadow-sm border text-center"><div class="text-xl font-black text-green-600">${stats.spec}</div><div class="text-[10px] uppercase font-bold text-gray-400">Species</div></div>
+                    <div class="bg-white p-3 rounded-2xl shadow-sm border text-center"><div class="text-xl font-black text-yellow-500">${stats.score.toLocaleString()}</div><div class="text-[10px] uppercase font-bold text-gray-400">Score</div></div>
+                    <div class="bg-amber-50 p-3 rounded-2xl shadow-sm border border-amber-200 text-center relative"><div class="text-xl font-black text-amber-600">${state.birdseed}</div><div class="text-[10px] uppercase font-bold text-amber-400">Birdseed</div><span class="absolute top-2 right-2 text-sm">🌾</span></div>
                 </div>
-                <div class="bg-yellow-50 border-2 border-yellow-200 p-4 rounded-3xl mb-6 flex items-center justify-between">
-                    <div><div class="text-[10px] font-black text-yellow-600 uppercase tracking-widest">Your Birdseed</div><div class="text-2xl font-black text-yellow-700">🟡 ${state.birdseed}</div></div>
-                    <div class="text-xs text-yellow-600 font-bold max-w-[120px] text-right">Every 10K points earns you 1 birdseed!</div>
+
+                <!-- Rank progress bar -->
+                <div class="bg-white rounded-2xl shadow-sm border p-3 mb-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-lg">${rank.emoji}</span>
+                            <span class="font-black text-sm ${rank.textColor}">${rank.name}</span>
+                        </div>
+                        ${nextRank
+                            ? `<span class="text-[10px] text-gray-400 font-bold">${stats.score.toLocaleString()} / ${rank.nextAt.toLocaleString()}</span>`
+                            : `<span class="text-[10px] font-black text-amber-500 uppercase tracking-widest">Max Rank! 👑</span>`
+                        }
+                    </div>
+                    <div class="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div class="h-full rounded-full bg-gradient-to-r ${rank.color} transition-all duration-500"
+                             style="width: ${progressPct}%"></div>
+                    </div>
+                    ${nextRank ? `<div class="text-[10px] text-gray-400 font-bold mt-1 text-right">${nextRank.emoji} ${nextRank.name} at ${rank.nextAt.toLocaleString()} pts</div>` : ''}
                 </div>
+
                 <button onclick="openChecklistPicker()" class="block w-full mb-4 group">
                     <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-10 rounded-3xl text-center font-black shadow-xl group-active:scale-95 transition-all">
                         <div class="text-5xl mb-3">🔍</div>
@@ -1344,7 +1546,7 @@
                         <div class="bg-white p-5 rounded-3xl border-2 shadow-sm flex items-center justify-between">
                             <div class="flex items-center gap-4">
                                 <div class="text-4xl ${egg.color} w-16 h-16 flex items-center justify-center rounded-2xl shadow-inner">${egg.emoji}</div>
-                                <div><div class="font-black text-gray-800 text-lg">${egg.name}</div><div class="text-xs font-bold text-yellow-600">🟡 ${egg.cost} Birdseed</div></div>
+                                <div><div class="font-black text-gray-800 text-lg">${egg.name}</div><div class="text-xs font-bold text-yellow-600">🌾 ${egg.cost} Birdseed</div></div>
                             </div>
                             <button onclick="buyEgg(${JSON.stringify(egg).replace(/"/g, '&quot;')})" 
                                 class="bg-blue-600 text-white px-6 py-3 rounded-2xl font-black shadow-lg shadow-blue-100 active:scale-95 transition-all ${state.birdseed < egg.cost ? 'opacity-30 grayscale pointer-events-none' : ''}">Buy</button>
@@ -1412,7 +1614,7 @@
                 : `<div class="text-3xl font-black text-blue-600">${c.total_score.toLocaleString()}</div>`;
 
             return `<div class="bg-white p-6 rounded-3xl shadow-xl border relative">
-                ${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-yellow-400 text-yellow-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🟡</div>` : ''}
+                ${c.seed_earned > 0 ? `<div class="absolute -top-3 -right-3 bg-amber-400 text-amber-900 px-4 py-2 rounded-2xl font-black text-sm shadow-xl seed-animate border-2 border-white">+${c.seed_earned} 🌾</div>` : ''}
                 ${botwBadge}
                 <div class="flex justify-between items-center mb-1">
                     <h2 class="font-black text-xl text-gray-900">${isLatest ? 'Last Checklist' : ''}</h2>
@@ -1450,7 +1652,7 @@
 
         function renderHistory() {
             return `<div class="flex justify-between items-end mb-6"><h2 class="font-black text-3xl text-gray-900">History</h2><button onclick="if(confirm('Wipe History?')) { state.checklists=[]; state.userHistory=[]; state.birdseed=0; state.eggs=[]; state.birds=[]; saveData(); render(); }" class="text-[10px] font-black text-red-400 uppercase tracking-widest">Clear All</button></div>
-                <div class="space-y-4">${state.checklists.map(c => `<div class="bg-white rounded-3xl shadow-sm border overflow-hidden"><button onclick="state.expandedChecklistId = (state.expandedChecklistId === ${c.id} ? null : ${c.id}); render();" class="w-full p-5 flex justify-between items-center hover:bg-gray-50 transition-colors"><div class="text-left"><div class="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">${c.date}</div><div class="font-black text-gray-800">${c.region}</div></div><div class="flex items-center gap-3">${c.seed_earned ? `<span class="text-xs font-black text-yellow-500">🟡 +${c.seed_earned}</span>` : ''}<div class="text-2xl font-black text-blue-600">${c.total_score.toLocaleString()}</div><span class="text-gray-300 font-bold">${state.expandedChecklistId === c.id ? '▲' : '▼'}</span></div></button>${state.expandedChecklistId === c.id ? `<div class="bg-gray-50 border-t p-4 space-y-3 animate-fadeIn">${c.observations.map((o, idx) => renderObservationRow(o, idx, 'history_' + c.id)).join('')}</div>` : ''}</div>`).join('')}</div>`;
+                <div class="space-y-4">${state.checklists.map(c => `<div class="bg-white rounded-3xl shadow-sm border overflow-hidden"><button onclick="state.expandedChecklistId = (state.expandedChecklistId === ${c.id} ? null : ${c.id}); render();" class="w-full p-5 flex justify-between items-center hover:bg-gray-50 transition-colors"><div class="text-left"><div class="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">${c.date}</div><div class="font-black text-gray-800">${c.region}</div></div><div class="flex items-center gap-3">${c.seed_earned ? `<span class="text-xs font-black text-yellow-500">🌾 +${c.seed_earned}</span>` : ''}<div class="text-2xl font-black text-blue-600">${c.total_score.toLocaleString()}</div><span class="text-gray-300 font-bold">${state.expandedChecklistId === c.id ? '▲' : '▼'}</span></div></button>${state.expandedChecklistId === c.id ? `<div class="bg-gray-50 border-t p-4 space-y-3 animate-fadeIn">${c.observations.map((o, idx) => renderObservationRow(o, idx, 'history_' + c.id)).join('')}</div>` : ''}</div>`).join('')}</div>`;
         }
 
         function renderRegionPrompt() {
@@ -1463,7 +1665,7 @@
         function renderHowItWorks() {
             return `<div class="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-6 z-50"><div class="bg-white rounded-[40px] p-8 max-w-md shadow-2xl relative"><h2 class="font-black text-2xl mb-4 text-gray-900">How Scoring Works</h2><div class="space-y-6">
                 <div class="flex gap-4"><div class="text-3xl bg-blue-50 w-14 h-14 rounded-2xl flex items-center justify-center">📉</div><div><h4 class="font-black text-gray-900">Rarity Score</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">The rarer the bird, the higher the score! There are 5 tiers: COMMON birds earn you a modest base score, UNCOMMON birds start to turn heads, SCARCE birds raise eyebrows, RARE birds have your birding friends questioning your sanity, and MEGA RARE birds are the stuff of legend - seen in fewer than 2% of all checklists.</p></div></div>
-                <div class="flex gap-4"><div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🟡</div><div><h4 class="font-black text-gray-900">Birdseed</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every 10,000 points earns you 1 birdseed (from all checklists!). Use seed to buy eggs in the Nest.</p></div></div>
+                <div class="flex gap-4"><div class="text-3xl bg-yellow-50 w-14 h-14 rounded-2xl flex items-center justify-center">🌾</div><div><h4 class="font-black text-gray-900">Birdseed</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every 10,000 points earns you 1 birdseed (from all checklists!). Use seed to buy eggs in the Nest.</p></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-purple-50 w-14 h-14 rounded-2xl flex items-center justify-center">✨</div><div><h4 class="font-black text-gray-900">Novelty Bonuses</h4><ul class="text-[11px] text-gray-500 space-y-1 mt-1 font-bold"><li>✨ <span class="text-green-600 uppercase tracking-tighter">Life Bird:</span> 4x bonus</li><li>🐦 <span class="text-blue-500 uppercase tracking-tighter">2nd Sighting:</span> 2x bonus</li></ul></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-green-50 w-14 h-14 rounded-2xl flex items-center justify-center">🔢</div><div><h4 class="font-black text-gray-900">Observation Multiplier</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Every bird counts! Independent sightings of a species count towards your score.</p></div></div>
                 <div class="flex gap-4"><div class="text-3xl bg-emerald-50 w-14 h-14 rounded-2xl flex items-center justify-center">🐦</div><div><h4 class="font-black text-gray-900">Bird of the Week</h4><p class="text-[11px] text-gray-500 font-bold leading-relaxed">Each Monday, a notable bird from your recent region becomes the Bird of the Week. Find it in any checklist that week to double ALL of your scores for the rest of the week!</p></div></div>
