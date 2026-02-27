@@ -1111,11 +1111,8 @@
             };
             render();
 
-            // Scroll the checklist card into view so the user sees the reveal
-            requestAnimationFrame(() => {
-                const el = document.getElementById('checklist-card');
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
+            // Scroll to bottom so the checklist reveal is fully visible
+            setTimeout(() => window.scrollTo({ top: 999999, behavior: 'smooth' }), 80);
 
             let delay = 0;
             sorted.forEach((obs, i) => {
@@ -1132,7 +1129,10 @@
                         const stats = { obs: state.userHistory.length, spec: new Set(state.userHistory.map(h => h.species_code)).size, score: totalScore };
                         // Only re-render the main content area to avoid killing modals
                         const main = app.querySelector('.reveal-host');
-                        if (main) main.innerHTML = renderHome(stats);
+                        if (main) {
+                            main.innerHTML = renderHome(stats);
+                            window.scrollTo({ top: 999999, behavior: 'smooth' });
+                        }
                     }
                     playRaritySound(obs.rarity);
 
