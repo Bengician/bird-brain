@@ -358,6 +358,10 @@
             eBirdUsername: null,
             showChecklistPicker: false,
             showUsernamePrompt: false,
+            showRegionPicker: false,
+            regionCodeMap: {},          // { "North Okanagan": "CA-BC-NO", ... }
+            selectedRegionCode: null,   // eBird region code chosen by user
+            selectedRegionName: null,   // human name of chosen region
             eBirdChecklists: [],
             checklistPickerLoading: false,
             checklistPickerError: null,
@@ -690,12 +694,40 @@
                 render();
                 return;
             }
+            // Always show region picker first
+            await openRegionPicker();
+        }
+
+        async function openRegionPicker() {
+            state.showRegionPicker = true;
+            render();
+            // Load region code map if not yet loaded
+            if (Object.keys(state.regionCodeMap).length === 0) {
+                await loadRegionCodes();
+            }
+            render();
+        }
+
+        async function loadRegionCodes() {
+            try {
+                const { data, error } = await db.from('d_region_codes').select('regionCode, Region');
+                if (error || !data) return;
+                const map = {};
+                data.forEach(row => { if (row.Region && row.regionCode) map[row.Region.trim()] = row.regionCode.trim(); });
+                state.regionCodeMap = map;
+            } catch(e) { console.error('loadRegionCodes error:', e); }
+        }
+
+        function selectRegionForFetch(regionName, regionCode) {
+            state.selectedRegionName = regionName;
+            state.selectedRegionCode = regionCode;
+            state.showRegionPicker = false;
             state.showChecklistPicker = true;
             state.checklistPickerLoading = true;
             state.checklistPickerError = null;
             state.eBirdChecklists = [];
             render();
-            await fetchUserChecklists();
+            fetchUserChecklists(regionCode);
         }
 
         async function saveeBirdUsername(username) {
@@ -704,17 +736,13 @@
             state.eBirdUsername = username;
             state.showUsernamePrompt = false;
             await saveData();
-            // Now open the picker
-            await openChecklistPicker();
+            await openRegionPicker();
         }
 
-        async function fetchUserChecklists() {
+        async function fetchUserChecklists(regionCode) {
             try {
-                // eBird API has no public "by username" endpoint — we fetch the regional
-                // feed and filter client-side by the user's display name.
-                const regionCode = state.birdOfWeek?.regionCode || (state.lastRegion ? await getRegionCodeForRegion(state.lastRegion) : null);
                 if (!regionCode) {
-                    state.checklistPickerError = 'Could not determine your region. Please upload a checklist first to set your region.';
+                    state.checklistPickerError = 'No region selected.';
                     state.checklistPickerLoading = false;
                     render();
                     return;
@@ -733,7 +761,7 @@
                 }
                 const data = await resp.json();
                 if (!data || data.length === 0) {
-                    state.checklistPickerError = 'No recent checklists found in your region.';
+                    state.checklistPickerError = 'No recent checklists found in this region.';
                     state.checklistPickerLoading = false;
                     render();
                     return;
@@ -747,7 +775,7 @@
                 );
 
                 if (userChecklists.length === 0) {
-                    state.checklistPickerError = `No recent checklists found for "${state.eBirdUsername}" in your region (${regionCode}). Note: your eBird display name may differ from your username — try entering your display name as it appears on eBird.`;
+                    state.checklistPickerError = `No recent checklists found for "${state.eBirdUsername}" in ${state.selectedRegionName || regionCode}. Make sure your display name matches exactly as it appears on eBird.`;
                     state.checklistPickerLoading = false;
                     render();
                     return;
@@ -1316,6 +1344,7 @@
                     ${state.showBirdOfWeekFound ? renderBirdOfWeekFoundModal() : ''}
                     ${state.showChecklistPicker ? renderChecklistPicker() : ''}
                     ${state.showUsernamePrompt ? renderUsernamePrompt() : ''}
+                    ${state.showRegionPicker ? renderRegionPicker() : ''}
                     ${state.showLevelUp ? renderLevelUpModal() : ''}
                     ${!state.showUserSelect ? `
                         <div class="fixed bottom-0 left-0 right-0 glass border-t flex justify-around p-2 pb-6 shadow-lg z-40">
@@ -1833,6 +1862,42 @@
             </div>`;
         }
 
+        function renderRegionPicker() {
+            // Build list: only regions that exist in both frequency_data AND d_region_codes
+            const regions = state.regions.filter(r => state.regionCodeMap[r]);
+            const loading = Object.keys(state.regionCodeMap).length === 0;
+
+            return `
+            <div class="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+                <div class="bg-white rounded-3xl w-full max-w-sm shadow-2xl flex flex-col" style="max-height: 85vh">
+                    <div class="p-6 border-b flex justify-between items-center flex-shrink-0">
+                        <div>
+                            <h2 class="font-black text-xl text-gray-900">Choose Region</h2>
+                            <div class="text-[11px] text-gray-400 font-bold mt-0.5">Where did you go birding?</div>
+                        </div>
+                        <button onclick="state.showRegionPicker=false; render()"
+                            class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">✕</button>
+                    </div>
+                    <div class="overflow-y-auto flex-1 p-4">
+                        ${loading
+                            ? `<div class="text-center py-16 animate-pulse">
+                                <div class="text-4xl mb-3">🗺️</div>
+                                <div class="font-black text-gray-400 uppercase tracking-widest text-sm">Loading regions...</div>
+                               </div>`
+                            : `<div class="space-y-2">
+                                ${regions.map(r => `
+                                    <button onclick="selectRegionForFetch('${r.replace(/'/g, "\\'")}', '${state.regionCodeMap[r]}')"
+                                        class="w-full text-left bg-gray-50 hover:bg-blue-50 border-2 hover:border-blue-300 rounded-2xl p-4 transition-all active:scale-95 flex justify-between items-center">
+                                        <span class="font-black text-gray-900">${r}</span>
+                                        <span class="text-[10px] font-bold text-gray-400 border border-gray-200 px-2 py-1 rounded-lg">${state.regionCodeMap[r]}</span>
+                                    </button>`).join('')}
+                               </div>`
+                        }
+                    </div>
+                </div>
+            </div>`;
+        }
+
         function renderChecklistPicker() {
             let body = '';
 
@@ -1845,10 +1910,16 @@
                 body = `<div class="text-center py-10">
                     <div class="text-4xl mb-3">⚠️</div>
                     <div class="font-bold text-red-500 text-sm mb-6">${state.checklistPickerError}</div>
-                    <button onclick="state.eBirdUsername=null; state.checklistPickerError=null; state.showChecklistPicker=false; state.showUsernamePrompt=true; render()"
-                        class="text-xs font-black uppercase tracking-widest text-blue-500 border-2 border-blue-200 px-6 py-3 rounded-2xl">
-                        Change Username
-                    </button>
+                    <div class="flex flex-col gap-3">
+                        <button onclick="state.showChecklistPicker=false; openRegionPicker()"
+                            class="text-xs font-black uppercase tracking-widest text-blue-500 border-2 border-blue-200 px-6 py-3 rounded-2xl">
+                            📍 Try a Different Region
+                        </button>
+                        <button onclick="state.eBirdUsername=null; state.checklistPickerError=null; state.showChecklistPicker=false; state.showUsernamePrompt=true; render()"
+                            class="text-xs font-black uppercase tracking-widest text-gray-400 border-2 border-gray-200 px-6 py-3 rounded-2xl">
+                            👤 Change Username
+                        </button>
+                    </div>
                 </div>`;
             } else {
                 body = `<div class="space-y-3">
@@ -1887,12 +1958,16 @@
                     <div class="p-6 border-b flex justify-between items-center flex-shrink-0">
                         <div>
                             <h2 class="font-black text-xl text-gray-900">My Checklists</h2>
-                            <div class="text-[11px] text-gray-400 font-bold mt-0.5">@${state.eBirdUsername}</div>
+                            <div class="text-[11px] text-gray-400 font-bold mt-0.5">@${state.eBirdUsername} · ${state.selectedRegionName || ''}</div>
                         </div>
                         <div class="flex gap-2">
+                            <button onclick="state.showChecklistPicker=false; openRegionPicker()"
+                                class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">
+                                📍 Region
+                            </button>
                             <button onclick="state.eBirdUsername=null; state.showChecklistPicker=false; state.showUsernamePrompt=true; render()"
                                 class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">
-                                Change
+                                👤
                             </button>
                             <button onclick="state.showChecklistPicker=false; render()"
                                 class="text-[10px] font-black uppercase tracking-widest text-gray-400 border border-gray-200 px-3 py-1.5 rounded-xl">
