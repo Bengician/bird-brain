@@ -447,6 +447,9 @@
 
         async function selectUser(username) {
             state.loading = true;
+            state.currentResult = null;
+            state.lastRegion = null;
+            state.eBirdUsername = null;
             render();
             state.currentUser = username;
             localStorage.setItem('current_user', username);
@@ -662,15 +665,21 @@
             const season = info.frequency < 0.25 * info.peak_frequency ? 1.5 : 1.0;
             const prevCount = history.filter(h => h.species_code === species).length;
             const novelty = prevCount === 0 ? 4.0 : (prevCount === 1 ? 2.0 : 1.0);
-            const final = Math.round(base * season * novelty * count * 10);
-            
+
             const tier = RARITY_TIERS.find(t => info.peak_frequency >= t.min && info.peak_frequency < t.max) || RARITY_TIERS[4];
+
+            // Count multiplier: log-scale for COMMON/UNCOMMON, ignored for SCARCE and above
+            const isRare = tier.id === 'SCARCE' || tier.id === 'RARE' || tier.id === 'MEGA RARE';
+            const countMultiplier = isRare ? 1 : Math.max(1, Math.log2(count + 1));
+
+            const final = Math.round(base * season * novelty * countMultiplier * 10);
             
             return {
                 species_code: species, score: final, base_score: Math.round(base * 10),
-                seasonal_bonus: season, novelty_multiplier: novelty, count_multiplier: count,
+                seasonal_bonus: season, novelty_multiplier: novelty, count_multiplier: countMultiplier,
                 rarity: tier.id, rarity_color: tier.color, frequency: info.frequency, 
-                is_first: prevCount === 0, is_second: prevCount === 1
+                is_first: prevCount === 0, is_second: prevCount === 1,
+                count_ignored: isRare, raw_count: count
             };
         }
 
@@ -1803,14 +1812,14 @@
                 <button onclick="state.expandedSpeciesId = (state.expandedSpeciesId === '${uniqueId}' ? null : '${uniqueId}'); render()" class="w-full p-4 flex justify-between items-center">
                     <div class="text-left"><div class="font-black text-gray-800 text-lg flex items-center gap-2">${o.species_code} <span class="text-[10px] bg-${o.rarity_color}-600 text-white px-2 py-0.5 rounded-full uppercase font-bold tracking-tighter ${badgeClass}">${o.rarity}</span></div>
                     <div class="flex items-center gap-2 mt-0.5">${o.is_first ? '<span class="text-[10px] font-black text-green-600 uppercase tracking-tighter">Life Bird! (4x Bonus)</span>' : (o.is_second ? '<span class="text-[10px] font-black text-blue-500 uppercase tracking-tighter">2nd Sighting (2x Bonus)</span>' : '')}
-                    ${o.count_multiplier > 1 ? `<span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-md font-black border border-green-200 uppercase tracking-tighter">x${o.count_multiplier}</span>` : ''}</div></div>
+                    ${o.count_multiplier > 1 ? `<span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-md font-black border border-green-200 uppercase tracking-tighter">×${o.count_multiplier.toFixed(1)}</span>` : ''}</div></div>
                     <div class="font-black text-xl text-blue-800 ${scoreClass}">${o.score.toLocaleString()}</div>
                 </button>
                 ${isExpanded ? `<div class="p-4 border-t bg-white text-[11px] space-y-2 text-gray-600 animate-fadeIn">
                     <div class="flex justify-between"><span>Base Score (F: ${(o.frequency*100).toFixed(2)}%)</span><span class="font-bold text-blue-600">${o.base_score}</span></div>
                     <div class="flex justify-between"><span>Seasonal Multiplier</span><span class="font-bold text-orange-500">×${o.seasonal_bonus}</span></div>
                     <div class="flex justify-between"><span>Novelty Multiplier</span><span class="font-bold text-purple-600">×${o.novelty_multiplier}</span></div>
-                    <div class="flex justify-between"><span>Observation Multiplier</span><span class="font-bold text-green-600">×${o.count_multiplier}</span></div>
+                    <div class="flex justify-between"><span>${o.count_ignored ? `Count (${o.raw_count ?? '?'} seen — rarity wins)` : `Count Multiplier`}</span><span class="font-bold text-green-600">${o.count_ignored ? '×1 (ignored)' : '×' + (o.count_multiplier != null ? Number(o.count_multiplier).toFixed(1) : '?')}</span></div>
                     ${o.botw_doubled ? `<div class="flex justify-between text-emerald-700"><span>🐦 Bird of the Week Bonus</span><span class="font-bold">×2</span></div>` : ''}
                     <div class="flex justify-between font-black border-t pt-2 text-gray-900 text-sm"><span>Final Points</span><span>${o.score.toLocaleString()}</span></div>
                 </div>` : ''}</div>`;
@@ -1845,7 +1854,7 @@
                 <div class="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl">
                     <div class="text-5xl mb-4 text-center">🐦</div>
                     <h2 class="font-black text-2xl mb-2 text-gray-900 text-center">Connect eBird</h2>
-                    <p class="text-gray-400 text-sm mb-6 text-center leading-relaxed">Enter your eBird username to fetch your checklists directly — no more CSV downloads!</p>
+                    <p class="text-gray-400 text-sm mb-6 text-center leading-relaxed">Enter your eBird username to fetch your checklists directly.</p>
                     <input id="eBirdUsernameInput" type="text" placeholder="Your eBird username"
                         class="w-full border-2 p-4 rounded-2xl outline-none focus:border-blue-500 transition-all font-bold text-gray-800 mb-3 text-center"
                         onkeydown="if(event.key==='Enter') saveeBirdUsername(document.getElementById('eBirdUsernameInput').value)" />
