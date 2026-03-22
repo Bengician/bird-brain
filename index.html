@@ -2087,8 +2087,7 @@
                         ${state.eBirdUsername ? `<div class="text-sm opacity-70 mt-2 font-bold">@${state.eBirdUsername}</div>` : `<div class="text-sm opacity-70 mt-2 font-bold">Connect your eBird account</div>`}
                     </div>
                 </button>
-                <button onclick="state.showHowItWorks=true;render()" class="w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-2 hover:text-blue-500 transition-colors">How is Score Calculated?</button>
-                <button onclick="localStorage.removeItem('bb_install_dismissed'); localStorage.removeItem('bb_ios_tip_dismissed'); sessionStorage.removeItem('bb_splash_shown'); alert('PWA flags cleared! Reload to test.');" class="w-full text-gray-300 text-[10px] font-bold uppercase tracking-widest mb-6 hover:text-red-400 transition-colors">Reset Install Flags</button>
+                <button onclick="state.showHowItWorks=true;render()" class="w-full text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 hover:text-blue-500 transition-colors">How is Score Calculated?</button>
                 <div id="checklist-card">
                     ${state.currentResult ? renderChecklistCard(state.currentResult, true) : `<div class="text-center py-20 text-gray-300 font-bold border-4 border-dashed rounded-3xl">No checklists yet.</div>`}
                 </div>
