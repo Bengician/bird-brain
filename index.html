@@ -11,6 +11,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Bird Brain">
     <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-2.5 0 150 150'%3E%3Crect x='-2.5' width='155' height='150' rx='30' fill='%2314532d'/%3E%3Cpath d='M60.4167 125H48.3333V106.25H60.4167V125ZM45.8502 36.525L12.0833 53.125L36.25 72.2687L45.8502 36.525Z' fill='white'/%3E%3Cpath d='M103.198 90.3688L132.917 118.75H108.75L93.1867 102.65C85.9004 108.8 76.5963 112.5 66.4583 112.5C43.1013 112.5 24.1667 92.9125 24.1667 68.75C24.1667 48.9312 36.9085 30.1187 54.375 23.9812V43.75L103.198 90.3688Z' fill='white'/%3E%3C/svg%3E">
+    <link rel="manifest" href="./manifest.json">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -76,6 +77,25 @@
             transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.4s ease;
         }
         #install-banner.show { transform: translateY(0); opacity: 1; }
+
+        /* iOS install tip */
+        #ios-install-tip {
+            position: fixed; bottom: 80px; left: 12px; right: 12px; z-index: 200;
+            background: #14532d; color: white;
+            border-radius: 20px; padding: 16px 18px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            transform: translateY(120px); opacity: 0;
+            transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.4s ease;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        #ios-install-tip.show { transform: translateY(0); opacity: 1; }
+        #ios-install-tip::after {
+            content: '';
+            position: absolute; bottom: -10px; left: 50%;
+            transform: translateX(-50%);
+            border: 10px solid transparent;
+            border-top-color: #14532d; border-bottom: none;
+        }
         
         /* Economy Animations */
         @keyframes seedPop {
@@ -269,30 +289,18 @@
 
     <div id="app"></div>
 
-    <script>
-        // --- PWA MANIFEST (injected dynamically, no server needed) ---
-        (function() {
-            const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="115" fill="%2314532d"/><ellipse cx="256" cy="210" rx="60" ry="48" fill="white"/><path d="M296 205 Q370 160 420 175 Q380 210 350 220 Q390 225 410 245 Q365 248 320 230 Q300 225 296 205Z" fill="white"/><circle cx="278" cy="192" r="7" fill="%2314532d"/><path d="M196 210 Q140 240 110 285 Q155 268 200 272" fill="white"/><path d="M220 248 Q198 295 183 345 Q212 312 244 308 Q238 282 230 258Z" fill="white"/><path d="M272 250 Q278 295 275 345 Q252 314 232 310 Q240 284 254 260Z" fill="white"/></svg>`;
-            const manifest = {
-                name: 'Bird Brain',
-                short_name: 'Bird Brain',
-                description: 'Score your eBird checklists and compete with friends',
-                start_url: './',
-                display: 'standalone',
-                background_color: '#14532d',
-                theme_color: '#14532d',
-                orientation: 'portrait',
-                icons: [
-                    { src: `data:image/svg+xml,${iconSvg}`, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }
-                ]
-            };
-            const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('link');
-            link.rel = 'manifest'; link.href = url;
-            document.head.appendChild(link);
-        })();
+    <!-- iOS install tip -->
+    <div id="ios-install-tip" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+            <div style="font-weight:800;font-size:14px">Add Bird Brain to your Home Screen</div>
+            <button class="ios-tip-close" style="background:none;border:none;color:rgba(255,255,255,0.7);font-size:20px;cursor:pointer;padding:0;margin:-4px -4px 0 12px;line-height:1">×</button>
+        </div>
+        <div style="font-size:12px;opacity:0.85;line-height:1.5">
+            Tap <strong>Share</strong> <span style="font-size:16px">⎙</span> at the bottom of your browser, then tap <strong>Add to Home Screen</strong>.
+        </div>
+    </div>
 
+    <script>
         // --- SPLASH SCREEN ---
         function playTweetSound() {
             try {
@@ -361,6 +369,29 @@
 
         // Run splash immediately
         runSplash();
+
+        // --- SERVICE WORKER ---
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').catch(e => console.log('SW registration failed:', e));
+        }
+
+        // --- iOS INSTALL TOOLTIP ---
+        (function() {
+            const isIos = /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
+            const isStandalone = window.navigator.standalone;
+            const dismissed = localStorage.getItem('bb_ios_tip_dismissed');
+            if (isIos && !isStandalone && !dismissed) {
+                const tip = document.getElementById('ios-install-tip');
+                if (tip) {
+                    tip.style.display = 'block';
+                    setTimeout(() => tip.classList.add('show'), 3500);
+                    tip.querySelector('.ios-tip-close').addEventListener('click', () => {
+                        tip.classList.remove('show');
+                        localStorage.setItem('bb_ios_tip_dismissed', '1');
+                    });
+                }
+            }
+        })();
 
         // --- PWA INSTALL PROMPT (Android/Chrome) ---
         let deferredInstallPrompt = null;
