@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Bird Brain</title>
+
+    <!-- PWA -->
+    <meta name="theme-color" content="#14532d">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Bird Brain">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-2.5 0 150 150'%3E%3Crect x='-2.5' width='155' height='150' rx='30' fill='%2314532d'/%3E%3Cpath d='M60.4167 125H48.3333V106.25H60.4167V125ZM45.8502 36.525L12.0833 53.125L36.25 72.2687L45.8502 36.525Z' fill='white'/%3E%3Cpath d='M103.198 90.3688L132.917 118.75H108.75L93.1867 102.65C85.9004 108.8 76.5963 112.5 66.4583 112.5C43.1013 112.5 24.1667 92.9125 24.1667 68.75C24.1667 48.9312 36.9085 30.1187 54.375 23.9812V43.75L103.198 90.3688Z' fill='white'/%3E%3C/svg%3E">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -12,6 +20,62 @@
         .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
+
+        /* Splash screen */
+        #splash {
+            position: fixed; inset: 0; z-index: 9999;
+            background: #14532d;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            transition: opacity 0.6s ease-out;
+        }
+        #splash.hiding { opacity: 0; pointer-events: none; }
+        #splash-bird {
+            opacity: 0;
+            transform: translateX(-120vw) translateY(30px) scaleX(-1);
+            transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1),
+                        opacity 0.3s ease-out;
+            filter: drop-shadow(0 8px 24px rgba(0,0,0,0.4));
+        }
+        #splash-bird.flying-in {
+            opacity: 1;
+            transform: translateX(0) translateY(0) scaleX(-1);
+        }
+        #splash-bird.flying-out {
+            opacity: 0;
+            transform: translateX(80vw) translateY(-40px) scaleX(-1);
+            transition: transform 0.7s cubic-bezier(0.55, 0, 1, 0.45),
+                        opacity 0.4s ease-in;
+        }
+        #splash-title {
+            opacity: 0;
+            transform: translateY(16px);
+            transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+            margin-top: 28px;
+            color: rgba(255,255,255,0.92);
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.25em;
+            text-transform: uppercase;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        #splash-title.visible { opacity: 1; transform: translateY(0); }
+
+        /* App fade-in after splash */
+        #app { opacity: 0; transition: opacity 0.5s ease-out; }
+        #app.visible { opacity: 1; }
+
+        /* Install banner */
+        #install-banner {
+            position: fixed; bottom: 80px; left: 12px; right: 12px; z-index: 200;
+            background: #14532d; color: white;
+            border-radius: 20px; padding: 14px 18px;
+            display: flex; align-items: center; gap: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            transform: translateY(120px); opacity: 0;
+            transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.4s ease;
+        }
+        #install-banner.show { transform: translateY(0); opacity: 1; }
         
         /* Economy Animations */
         @keyframes seedPop {
@@ -175,9 +239,153 @@
     </style>
 </head>
 <body>
+
+    <!-- Splash screen -->
+    <div id="splash">
+        <svg id="splash-bird" width="160" height="160" viewBox="-2.5 0 150 150" fill="none" xmlns="http://www.w3.org/2000/svg" transform="scale(-1,1)" style="transform:scaleX(-1)">
+            <path d="M60.4167 125H48.3333V106.25H60.4167V125ZM45.8502 36.525L12.0833 53.125L36.25 72.2687L45.8502 36.525Z" fill="white"/>
+            <path d="M103.198 90.3688L132.917 118.75H108.75L93.1867 102.65C85.9004 108.8 76.5963 112.5 66.4583 112.5C43.1013 112.5 24.1667 92.9125 24.1667 68.75C24.1667 48.9312 36.9085 30.1187 54.375 23.9812V43.75L103.198 90.3688Z" fill="white"/>
+            <path d="M100.678 87.9687C96.0081 91.025 90.5162 92.8625 84.5833 92.8625C67.8962 92.8625 54.375 78.875 54.375 61.6125V43.75L100.678 87.9687Z" fill="rgba(255,255,255,0.55)"/>
+            <path d="M48.3333 59.375C48.3333 68.0062 41.5727 75 33.2292 75C29.9183 75 26.8794 73.8687 24.3902 72C24.3117 70.9187 24.1667 69.8562 24.1667 68.75C24.1667 59.9125 26.7404 51.1375 31.1206 43.7625C31.8094 43.6687 32.5163 43.75 33.2292 43.75C41.5727 43.75 48.3333 50.7437 48.3333 59.375Z" fill="rgba(255,255,255,0.65)"/>
+        </svg>
+        <div id="splash-title">Bird Brain</div>
+    </div>
+
+    <!-- Install banner (Android/Chrome only) -->
+    <div id="install-banner" style="display:none">
+        <svg width="32" height="32" viewBox="0 0 512 512" fill="none">
+            <rect width="512" height="512" rx="115" fill="white"/>
+            <ellipse cx="256" cy="210" rx="60" ry="48" fill="#14532d"/>
+            <path d="M296 205 Q370 160 420 175 Q380 210 350 220 Q390 225 410 245 Q365 248 320 230 Q300 225 296 205Z" fill="#14532d"/>
+            <circle cx="278" cy="192" r="7" fill="white"/>
+        </svg>
+        <div style="flex:1">
+            <div style="font-weight:800;font-size:14px">Add Bird Brain to Home Screen</div>
+            <div style="font-size:11px;opacity:0.75;margin-top:2px">For the full app experience</div>
+        </div>
+        <button id="install-btn" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:white;padding:8px 14px;border-radius:12px;font-weight:800;font-size:12px;cursor:pointer">Install</button>
+        <button onclick="document.getElementById('install-banner').classList.remove('show')" style="background:none;border:none;color:rgba(255,255,255,0.6);font-size:18px;cursor:pointer;padding:0 4px">×</button>
+    </div>
+
     <div id="app"></div>
 
     <script>
+        // --- PWA MANIFEST (injected dynamically, no server needed) ---
+        (function() {
+            const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="115" fill="%2314532d"/><ellipse cx="256" cy="210" rx="60" ry="48" fill="white"/><path d="M296 205 Q370 160 420 175 Q380 210 350 220 Q390 225 410 245 Q365 248 320 230 Q300 225 296 205Z" fill="white"/><circle cx="278" cy="192" r="7" fill="%2314532d"/><path d="M196 210 Q140 240 110 285 Q155 268 200 272" fill="white"/><path d="M220 248 Q198 295 183 345 Q212 312 244 308 Q238 282 230 258Z" fill="white"/><path d="M272 250 Q278 295 275 345 Q252 314 232 310 Q240 284 254 260Z" fill="white"/></svg>`;
+            const manifest = {
+                name: 'Bird Brain',
+                short_name: 'Bird Brain',
+                description: 'Score your eBird checklists and compete with friends',
+                start_url: './',
+                display: 'standalone',
+                background_color: '#14532d',
+                theme_color: '#14532d',
+                orientation: 'portrait',
+                icons: [
+                    { src: `data:image/svg+xml,${iconSvg}`, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }
+                ]
+            };
+            const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('link');
+            link.rel = 'manifest'; link.href = url;
+            document.head.appendChild(link);
+        })();
+
+        // --- SPLASH SCREEN ---
+        function playTweetSound() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const play = (freq, start, dur, type='sine', gain=0.18) => {
+                    const osc = ctx.createOscillator();
+                    const g = ctx.createGain();
+                    osc.connect(g); g.connect(ctx.destination);
+                    osc.type = type; osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                    osc.frequency.linearRampToValueAtTime(freq * 1.18, ctx.currentTime + start + dur * 0.4);
+                    osc.frequency.linearRampToValueAtTime(freq * 0.92, ctx.currentTime + start + dur);
+                    g.gain.setValueAtTime(0, ctx.currentTime + start);
+                    g.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.015);
+                    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+                    osc.start(ctx.currentTime + start);
+                    osc.stop(ctx.currentTime + start + dur + 0.01);
+                };
+                // Three-note chirp: classic passerine tweet
+                play(2800, 0.00, 0.10, 'sine', 0.16);
+                play(3200, 0.08, 0.08, 'sine', 0.14);
+                play(2600, 0.15, 0.14, 'sine', 0.18);
+                // Soft harmonic underneath
+                play(1400, 0.00, 0.22, 'sine', 0.06);
+                // Second phrase after a short pause
+                play(3000, 0.38, 0.10, 'sine', 0.14);
+                play(3400, 0.46, 0.10, 'sine', 0.12);
+                play(2800, 0.54, 0.16, 'sine', 0.15);
+            } catch(e) {}
+        }
+
+        function runSplash() {
+            const splash = document.getElementById('splash');
+            const bird   = document.getElementById('splash-bird');
+            const title  = document.getElementById('splash-title');
+            const app    = document.getElementById('app');
+
+            // Only show splash when launched as installed PWA or first visit
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                              || window.navigator.standalone;
+            const seenSplash = sessionStorage.getItem('bb_splash_shown');
+
+            if (!isStandalone && seenSplash) {
+                splash.style.display = 'none';
+                app.classList.add('visible');
+                return;
+            }
+            sessionStorage.setItem('bb_splash_shown', '1');
+
+            // Bird flies in
+            setTimeout(() => {
+                bird.classList.add('flying-in');
+                playTweetSound();
+            }, 120);
+
+            // Title fades up
+            setTimeout(() => title.classList.add('visible'), 500);
+
+            // Brief pause, then bird flies out and app reveals
+            setTimeout(() => bird.classList.add('flying-out'), 1600);
+            setTimeout(() => {
+                splash.classList.add('hiding');
+                app.classList.add('visible');
+            }, 2100);
+            setTimeout(() => splash.style.display = 'none', 2800);
+        }
+
+        // Run splash immediately
+        runSplash();
+
+        // --- PWA INSTALL PROMPT (Android/Chrome) ---
+        let deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            const banner = document.getElementById('install-banner');
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+            if (!isStandalone && !localStorage.getItem('bb_install_dismissed')) {
+                banner.style.display = 'flex';
+                setTimeout(() => banner.classList.add('show'), 3500);
+            }
+        });
+        document.getElementById('install-btn').addEventListener('click', async () => {
+            if (!deferredInstallPrompt) return;
+            deferredInstallPrompt.prompt();
+            const { outcome } = await deferredInstallPrompt.userChoice;
+            if (outcome === 'accepted') localStorage.setItem('bb_install_dismissed', '1');
+            document.getElementById('install-banner').classList.remove('show');
+            deferredInstallPrompt = null;
+        });
+        document.querySelector('#install-banner button:last-child').addEventListener('click', () => {
+            localStorage.setItem('bb_install_dismissed', '1');
+        });
+
         // --- CLOUD CONFIGURATION ---
         const SB_URL = 'https://hoblpnpkhbxqfurchiqo.supabase.co';
         const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhvYmxwbnBraGJ4cWZ1cmNoaXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3NjgzNzksImV4cCI6MjA4MzM0NDM3OX0.poDCCTvbE-3wxTGanT_quIUw9F-hXoz2YAwVxoK7Kvw';
