@@ -6,11 +6,11 @@
     <title>Bird Brain</title>
 
     <!-- PWA -->
-    <meta name="theme-color" content="#14532d">
+    <meta name="theme-color" content="#0369a1">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Bird Brain">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-2.5 0 150 150'%3E%3Crect x='-2.5' width='155' height='150' rx='30' fill='%2314532d'/%3E%3Cpath d='M60.4167 125H48.3333V106.25H60.4167V125ZM45.8502 36.525L12.0833 53.125L36.25 72.2687L45.8502 36.525Z' fill='white'/%3E%3Cpath d='M103.198 90.3688L132.917 118.75H108.75L93.1867 102.65C85.9004 108.8 76.5963 112.5 66.4583 112.5C43.1013 112.5 24.1667 92.9125 24.1667 68.75C24.1667 48.9312 36.9085 30.1187 54.375 23.9812V43.75L103.198 90.3688Z' fill='white'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-2.5 0 150 150'%3E%3Crect x='-2.5' width='155' height='150' rx='30' fill='%230369a1'/%3E%3Cpath d='M60.4167 125H48.3333V106.25H60.4167V125ZM45.8502 36.525L12.0833 53.125L36.25 72.2687L45.8502 36.525Z' fill='white'/%3E%3Cpath d='M103.198 90.3688L132.917 118.75H108.75L93.1867 102.65C85.9004 108.8 76.5963 112.5 66.4583 112.5C43.1013 112.5 24.1667 92.9125 24.1667 68.75C24.1667 48.9312 36.9085 30.1187 54.375 23.9812V43.75L103.198 90.3688Z' fill='white'/%3E%3C/svg%3E">
     <link rel="manifest" href="./manifest.json">
 
     <script src="https://cdn.tailwindcss.com"></script>
@@ -25,7 +25,7 @@
         /* Splash screen */
         #splash {
             position: fixed; inset: 0; z-index: 9999;
-            background: #14532d;
+            background: #0369a1;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             transition: opacity 0.6s ease-out;
@@ -69,7 +69,7 @@
         /* Install banner */
         #install-banner {
             position: fixed; bottom: 80px; left: 12px; right: 12px; z-index: 200;
-            background: #14532d; color: white;
+            background: #0369a1; color: white;
             border-radius: 20px; padding: 14px 18px;
             display: flex; align-items: center; gap: 12px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.25);
@@ -81,7 +81,7 @@
         /* iOS install tip */
         #ios-install-tip {
             position: fixed; bottom: 80px; left: 12px; right: 12px; z-index: 200;
-            background: #14532d; color: white;
+            background: #0369a1; color: white;
             border-radius: 20px; padding: 16px 18px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.3);
             transform: translateY(120px); opacity: 0;
@@ -94,7 +94,7 @@
             position: absolute; bottom: -10px; left: 50%;
             transform: translateX(-50%);
             border: 10px solid transparent;
-            border-top-color: #14532d; border-bottom: none;
+            border-top-color: #0369a1; border-bottom: none;
         }
         
         /* Economy Animations */
@@ -275,8 +275,8 @@
     <div id="install-banner" style="display:none">
         <svg width="32" height="32" viewBox="0 0 512 512" fill="none">
             <rect width="512" height="512" rx="115" fill="white"/>
-            <ellipse cx="256" cy="210" rx="60" ry="48" fill="#14532d"/>
-            <path d="M296 205 Q370 160 420 175 Q380 210 350 220 Q390 225 410 245 Q365 248 320 230 Q300 225 296 205Z" fill="#14532d"/>
+            <ellipse cx="256" cy="210" rx="60" ry="48" fill="#0369a1"/>
+            <path d="M296 205 Q370 160 420 175 Q380 210 350 220 Q390 225 410 245 Q365 248 320 230 Q300 225 296 205Z" fill="#0369a1"/>
             <circle cx="278" cy="192" r="7" fill="white"/>
         </svg>
         <div style="flex:1">
@@ -337,12 +337,20 @@
             const title  = document.getElementById('splash-title');
             const app    = document.getElementById('app');
 
-            // Only show splash when launched as installed PWA or first visit
             const isStandalone = window.matchMedia('(display-mode: standalone)').matches
                               || window.navigator.standalone;
-            const seenSplash = sessionStorage.getItem('bb_splash_shown');
 
-            if (!isStandalone && seenSplash) {
+            // When launched from home screen icon, the OS already shows its own
+            // splash — skip ours entirely to avoid the double-splash effect
+            if (isStandalone) {
+                splash.style.display = 'none';
+                app.classList.add('visible');
+                return;
+            }
+
+            // In browser: show once per session
+            const seenSplash = sessionStorage.getItem('bb_splash_shown');
+            if (seenSplash) {
                 splash.style.display = 'none';
                 app.classList.add('visible');
                 return;

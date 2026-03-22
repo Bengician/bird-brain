@@ -1,4 +1,4 @@
-const CACHE = 'birdbrain-v3';
+const CACHE = 'birdbrain-v4';
 const PRECACHE = ['./', './index.html', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
