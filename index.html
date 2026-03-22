@@ -38,9 +38,16 @@
                         opacity 0.3s ease-out;
             filter: drop-shadow(0 8px 24px rgba(0,0,0,0.4));
         }
+        /* Browser mode: fly in from left */
         #splash-bird.flying-in {
             opacity: 1;
             transform: translateX(0) translateY(0) scaleX(-1);
+        }
+        /* Standalone mode: start centred, matching OS splash */
+        #splash-bird.instant-in {
+            opacity: 1;
+            transform: translateX(0) translateY(0) scaleX(-1);
+            transition: none;
         }
         #splash-bird.flying-out {
             opacity: 0;
@@ -340,15 +347,7 @@
             const isStandalone = window.matchMedia('(display-mode: standalone)').matches
                               || window.navigator.standalone;
 
-            // When launched from home screen icon, the OS already shows its own
-            // splash — skip ours entirely to avoid the double-splash effect
-            if (isStandalone) {
-                splash.style.display = 'none';
-                app.classList.add('visible');
-                return;
-            }
-
-            // In browser: show once per session
+            // Show once per session
             const seenSplash = sessionStorage.getItem('bb_splash_shown');
             if (seenSplash) {
                 splash.style.display = 'none';
@@ -357,22 +356,31 @@
             }
             sessionStorage.setItem('bb_splash_shown', '1');
 
-            // Bird flies in
-            setTimeout(() => {
-                bird.classList.add('flying-in');
-                playTweetSound();
-            }, 120);
-
-            // Title fades up
-            setTimeout(() => title.classList.add('visible'), 500);
-
-            // Brief pause, then bird flies out and app reveals
-            setTimeout(() => bird.classList.add('flying-out'), 1600);
-            setTimeout(() => {
-                splash.classList.add('hiding');
-                app.classList.add('visible');
-            }, 2100);
-            setTimeout(() => splash.style.display = 'none', 2800);
+            if (isStandalone) {
+                // Seamlessly continue from the OS splash — bird appears instantly
+                // centred (no fly-in), title fades up, then fades out
+                bird.classList.add('instant-in');
+                setTimeout(() => title.classList.add('visible'), 200);
+                setTimeout(() => bird.classList.add('flying-out'), 900);
+                setTimeout(() => {
+                    splash.classList.add('hiding');
+                    app.classList.add('visible');
+                }, 1300);
+                setTimeout(() => splash.style.display = 'none', 2000);
+            } else {
+                // Full animation in browser
+                setTimeout(() => {
+                    bird.classList.add('flying-in');
+                    playTweetSound();
+                }, 120);
+                setTimeout(() => title.classList.add('visible'), 500);
+                setTimeout(() => bird.classList.add('flying-out'), 1600);
+                setTimeout(() => {
+                    splash.classList.add('hiding');
+                    app.classList.add('visible');
+                }, 2100);
+                setTimeout(() => splash.style.display = 'none', 2800);
+            }
         }
 
         // Run splash immediately
